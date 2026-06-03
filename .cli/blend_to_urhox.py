@@ -409,8 +409,10 @@ class UrhoXExporter:
     def light_supported(self, obj: Any) -> bool:
         light_type = getattr(obj.data, "type", "")
         if light_type == "AREA":
-            self.reporter.warn(f"light '{obj.name}' is AREA and is skipped in the first exporter version")
-            return False
+            shape = getattr(obj.data, "shape", "SQUARE")
+            if shape in ("DISK", "ELLIPSE"):
+                self.reporter.warn(f"light '{obj.name}' is AREA/{shape}, approximated as RectLight")
+            return True
         return light_type in {"SUN", "POINT", "SPOT"}
 
     def warn_collection_instances(self) -> None:
@@ -970,14 +972,21 @@ class UrhoXExporter:
         self.next_component_id += 1
         comp = ET.SubElement(node_elem, "component", {"type": "Light", "id": str(comp_id)})
         light = obj.data
-        light_type = {"SUN": "Directional", "POINT": "Point", "SPOT": "Spot"}.get(light.type, "Point")
+        light_type = {"SUN": "Directional", "POINT": "Point", "SPOT": "Spot", "AREA": "Rect"}.get(light.type, "Point")
         add_attr(comp, "Light Type", light_type)
         color = tuple(float(c) for c in getattr(light, "color", (1.0, 1.0, 1.0)))
         add_attr(comp, "Color", fmt_vec((color[0], color[1], color[2], 1.0)))
-        add_attr(comp, "Brightness Multiplier", fmt_float(float(getattr(light, "energy", 1.0)) / 10.0 if light.type != "SUN" else float(getattr(light, "energy", 1.0))))
+        is_directional = light.type == "SUN"
+        add_attr(comp, "Brightness Multiplier", fmt_float(float(getattr(light, "energy", 1.0)) if is_directional else float(getattr(light, "energy", 1.0)) / 10.0))
         add_attr(comp, "Range", fmt_float(resolve_light_range(light, light_type)))
         if light.type == "SPOT":
             add_attr(comp, "Spot FOV", fmt_float(math.degrees(float(getattr(light, "spot_size", math.radians(45.0))))))
+        if light.type == "AREA":
+            shape = getattr(light, "shape", "SQUARE")
+            size_x = float(getattr(light, "size", 1.0))
+            size_y = float(getattr(light, "size_y", size_x)) if shape in ("RECTANGLE", "ELLIPSE") else size_x
+            add_attr(comp, "Source Width", fmt_float(max(size_x, 0.01)))
+            add_attr(comp, "Source Height", fmt_float(max(size_y, 0.01)))
         add_attr(comp, "Cast Shadows", "true" if getattr(light, "use_shadow", True) else "false")
 
     def append_camera(self, node_elem: ET.Element, obj: Any) -> None:

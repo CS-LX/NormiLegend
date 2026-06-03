@@ -5,20 +5,42 @@
     "id": "1838934907"
   },
   "entry": "main.lua",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "taptap_publish": {
-    "title": "<game title, required>",
-    "description": "<game description>",
-    "category": "<game category: rpg, casual, action, strategy, simulation, trivia, arcade, adventure, card, sports, racing, puzzle, educational, music, word, board>",
+    "title": "冰霜法师",
+    "description": "一款横版平台跳跃动作游戏，操控冰霜法师释放冰晶技能，挑战各类怪物与关卡",
+    "category": "action",
     "screen_orientation": "landscape",
     "collection_type": "sce",
     "trial_note": "<developer's note>",
     "app_platforms": "1,2",
-    "developer_id": 411438
+    "developer_id": 411438,
+    "app_id": 865870,
+    "miniapp_id": "tapmc3slkuss4tjuxm"
   },
   "assets": {
     "icon": "",
-    "screenshots": [],
-    "promotional_image": ""
+    "screenshots": [
+      "./assets/image/古堡场景预览_20260531061202.png",
+      "./assets/image/地牢场景_20260531061202.png",
+      "./assets/image/华丽古堡场景预览_20260531061448.png",
+      "./assets/image/蝴蝶镰刀武器_20260531072349.png",
+      "./assets/image/edited_镰刀细化_20260531072743.png"
+    ],
+    "promotional_image": "",
+    "screenshot_urls": [
+      "https://tapcode-sce.spark.xd.com/assets/game_material/p_mtjd/古堡场景预览_20260531061202.png",
+      "https://tapcode-sce.spark.xd.com/assets/game_material/p_mtjd/地牢场景_20260531061202.png",
+      "https://tapcode-sce.spark.xd.com/assets/game_material/p_mtjd/华丽古堡场景预览_20260531061448.png",
+      "https://tapcode-sce.spark.xd.com/assets/game_material/p_mtjd/蝴蝶镰刀武器_20260531072349.png",
+      "https://tapcode-sce.spark.xd.com/assets/game_material/p_mtjd/edited_镰刀细化_20260531072743.png"
+    ]
+  },
+  "metadata": {
+    "updated_at": "2026-06-02T05:55:51.850Z"
+  },
+  "test_qrcode": {
+    "url": "https://tapcode-sce.spark.xd.com/qrcode/p_mtjd_1780379751712.png",
+    "generated_at": "2026-06-02T05:55:51.850Z"
   }
 }
