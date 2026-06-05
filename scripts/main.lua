@@ -14,6 +14,10 @@ local WorldMap = require("WorldMap")
 local LevelConfig = require("LevelConfig")
 local SpriteEditor = require("SpriteEditor")
 local Video = require("urhox-libs/Video")
+local GameConfig = require("GameConfig")
+local GameState = require("GameState")
+local Renderer = require("Renderer")
+local GameUI = require("GameUI")
 
 -- ============================================================================
 -- 游戏常量
@@ -99,7 +103,10 @@ local mapBackButton_ = nil      -- 关卡选择页面左上角返回标题按钮
 
 -- 主菜单状态
 local showMainMenu_ = false     -- 主菜单（钢琴花园背景 + 右侧UI）
-local mainMenuUIRoot_ = nil     -- 主菜单UI根节点
+local mainMenuUIRoot_ = nil     -- 主菜单UI根节点（.videoPlayer 存储视频引用）
+
+-- 过场状态（使用全局表避免 local 数量上限）
+transition_ = { active = false, timer = 0, onComplete = nil, uiRoot = nil }
 
 ---@type Scene
 local scene_ = nil
@@ -110,6 +117,7 @@ local nvg_ = nil
 
 -- 玩家相关
 local playerNode_ = nil
+---@type RigidBody2D
 local playerBody_ = nil
 local footSensor_ = nil  -- 脚底传感器（地面检测用）
 local onGround_ = false
@@ -382,8 +390,10 @@ function Start()
         return
     end
 
-    -- 创建字体
-    nvgCreateFont(nvg_, "sans", "Fonts/MiSans-Regular.ttf")
+    -- 创建字体（香萃等粗宋）
+    nvgCreateFont(nvg_, "sans", "Fonts/XiangcuiDengcusong.ttf")
+
+    -- 自定义鼠标指针将在 UI.Init 之后初始化（见下方）
 
     -- 创建场景
     CreateScene()
@@ -403,10 +413,14 @@ function Start()
     -- 初始化UI系统（用于技能面板和背包面板）
     UI.Init({
         fonts = {
-            { family = "sans", weights = { normal = "Fonts/MiSans-Regular.ttf" } }
+            { family = "sans", weights = { normal = "Fonts/XiangcuiDengcusong.ttf" } }
         },
         scale = UI.Scale.DEFAULT,
     })
+
+    -- 初始化自定义鼠标指针（必须在 UI.Init 之后，使用 UI 的 NVG 上下文）
+    require("Cursor").Init()
+
     CreateSkillPanelUI()
     CreateInventoryPanelUI()
     -- 初始化序列帧编辑器（UI形式）
@@ -580,7 +594,7 @@ function Start()
         borderWidth = 1,
         borderColor = "rgba(255,255,255,0.3)",
         onClick = function()
-            ShowMainMenu()
+            ShowTransition(function() ShowMainMenu() end)
         end,
     }
 
@@ -715,12 +729,54 @@ function Stop()
 end
 
 -- ============================================================================
+-- 过场画面（界面切换时显示随机图片，持续2秒）
+-- ============================================================================
+function ShowTransition(onComplete)
+    -- 过场系统已禁用，直接执行回调
+    if onComplete then onComplete() end
+    do return end
+
+    -- 以下为保留代码（禁用状态）
+    local images = {
+        "image/transition_1.png",
+        "image/transition_2.png",
+        "image/transition_3.png",
+    }
+    local chosen = images[math.random(1, 3)]
+
+    transition_.active = true
+    transition_.timer = 2.0
+    transition_.onComplete = onComplete
+
+    transition_.uiRoot = UI.Panel {
+        position = "absolute",
+        top = 0, left = 0,
+        width = "100%", height = "100%",
+        backgroundImage = chosen,
+        backgroundFit = "cover",
+    }
+    UI.SetRoot(transition_.uiRoot)
+end
+
+function UpdateTransition(dt)
+    if not transition_.active then return end
+    transition_.timer = transition_.timer - dt
+    if transition_.timer <= 0 then
+        transition_.active = false
+        transition_.uiRoot = nil
+        local cb = transition_.onComplete
+        transition_.onComplete = nil
+        if cb then cb() end
+    end
+end
+
+-- ============================================================================
 -- 标题视频页面
 -- ============================================================================
 function ShowTitleScreen()
     showTitleScreen_ = true
 
-    -- 创建视频播放器（全屏循环播放，提前回跳 + 原生loop双保险避免黑帧）
+    -- 创建视频播放器（全屏循环播放，透明背景让底层尾帧透出）
     titleVideoPlayer_ = Video.VideoPlayer {
         src = "video/终.mp4",
         width = "100%",
@@ -728,16 +784,10 @@ function ShowTitleScreen()
         textureWidth = 1920,
         textureHeight = 1080,
         autoPlay = true,
-        loop = true,   -- 原生loop兜底
+        loop = true,
         muted = false,
         objectFit = "cover",
-        backgroundColor = {0, 0, 0, 255},
-        onTimeUpdate = function(self, currentTime, duration)
-            -- 距离结尾 0.6 秒时提前回跳（onTimeUpdate ~250ms触发一次，留足余量）
-            if duration > 1 and (duration - currentTime) < 0.6 then
-                self:Seek(0)
-            end
-        end,
+        backgroundColor = {0, 0, 0, 0},
     }
 
     -- 提示文本
@@ -750,22 +800,21 @@ function ShowTitleScreen()
     }
 
     -- 创建标题页UI根（覆盖全屏）
-    -- 底层放一张静态海报图兜底，万一视频瞬间空帧不会显示黑屏
     titleUIRoot_ = UI.Panel {
         position = "absolute",
         top = 0, left = 0,
         width = "100%", height = "100%",
         backgroundColor = {0, 0, 0, 255},
         children = {
-            -- 静态海报兜底层（视频闪烁时显示海报而非黑屏）
+            -- 视频尾帧静态图底层（循环间隙透出尾帧而非黑屏）
             UI.Panel {
                 position = "absolute",
                 top = 0, left = 0,
                 width = "100%", height = "100%",
-                backgroundImage = "image/ice_mage_poster_20260602130332.png",
+                backgroundImage = "image/title_last_frame.png",
                 backgroundFit = "cover",
             },
-            -- 视频层（覆盖在海报上方）
+            -- 视频层（覆盖在尾帧上方）
             UI.Panel {
                 position = "absolute",
                 top = 0, left = 0,
@@ -803,8 +852,236 @@ function DismissTitleScreen()
     end
     titleUIRoot_ = nil
 
-    -- 进入主菜单（非直接进入关卡选择）
-    ShowMainMenu()
+    -- 过场后进入主菜单
+    ShowTransition(function()
+        ShowMainMenu()
+    end)
+end
+
+-- ============================================================================
+-- 图层位置编辑器（调试用）
+-- ============================================================================
+function BuildLayerEditor()
+    if layerEditorPanel_ then
+        layerEditorPanel_:Destroy()
+        layerEditorPanel_ = nil
+    end
+
+    -- 切换按钮（始终可见）
+    local toggleBtn = UI.Button {
+        position = "absolute", bottom = 16, left = 16,
+        text = "图层编辑", fontSize = 12,
+        fontColor = {255, 255, 255, 220},
+        backgroundColor = {0, 0, 0, 180},
+        borderRadius = 4,
+        paddingLeft = 8, paddingRight = 8,
+        paddingTop = 4, paddingBottom = 4,
+        onClick = function()
+            layerEditorVisible_ = not layerEditorVisible_
+            RefreshLayerEditor()
+        end,
+    }
+    mainMenuUIRoot_:AddChild(toggleBtn)
+    layerEditorToggle_ = toggleBtn
+
+    -- 编辑面板
+    layerEditorPanel_ = UI.Panel {
+        id = "layerEditorPanel",
+        position = "absolute", bottom = 50, left = 16,
+        width = 320, maxHeight = "80%",
+        backgroundColor = {0, 0, 0, 200},
+        borderRadius = 8,
+        paddingTop = 10, paddingBottom = 10,
+        paddingLeft = 10, paddingRight = 10,
+        flexDirection = "column", gap = 6,
+        display = "none",
+    }
+    mainMenuUIRoot_:AddChild(layerEditorPanel_)
+    RefreshLayerEditor()
+end
+
+function RefreshLayerEditor()
+    if not layerEditorPanel_ then return end
+    -- 清空旧内容
+    layerEditorPanel_:ClearChildren()
+
+    if not layerEditorVisible_ then
+        layerEditorPanel_:SetStyle({ display = "none" })
+        return
+    end
+    layerEditorPanel_:SetStyle({ display = "flex" })
+
+    -- 标题
+    layerEditorPanel_:AddChild(UI.Label {
+        text = "图层位置编辑器", fontSize = 14,
+        fontColor = {255, 255, 255, 255},
+        marginBottom = 4,
+    })
+
+    -- 为每个图层创建控制行
+    for i, layer in ipairs(layerEditorData_) do
+        local row = UI.Panel {
+            flexDirection = "row", alignItems = "center", gap = 4,
+            width = "100%",
+        }
+        -- 图层名
+        row:AddChild(UI.Label {
+            text = layer.name, fontSize = 11,
+            fontColor = {200, 200, 255, 255},
+            width = 55,
+        })
+        -- top 标签
+        row:AddChild(UI.Label { text = "T:", fontSize = 10, fontColor = {180,180,180,255}, width = 14 })
+        -- top -
+        row:AddChild(UI.Button {
+            text = "-", fontSize = 12, width = 22, height = 22,
+            backgroundColor = {80, 80, 120, 200}, borderRadius = 3,
+            justifyContent = "center", alignItems = "center",
+            fontColor = {255,255,255,255},
+            onClick = function()
+                layerEditorData_[i].top = layerEditorData_[i].top - 0.5
+                ApplyLayerEditorPos(i)
+                RefreshLayerEditorValues()
+            end,
+        })
+        -- top 值显示
+        row:AddChild(UI.Label {
+            id = "le_top_" .. i, text = tostring(layer.top), fontSize = 11,
+            fontColor = {255,255,255,255}, width = 30, textAlign = "center",
+        })
+        -- top +
+        row:AddChild(UI.Button {
+            text = "+", fontSize = 12, width = 22, height = 22,
+            backgroundColor = {80, 80, 120, 200}, borderRadius = 3,
+            justifyContent = "center", alignItems = "center",
+            fontColor = {255,255,255,255},
+            onClick = function()
+                layerEditorData_[i].top = layerEditorData_[i].top + 0.5
+                ApplyLayerEditorPos(i)
+                RefreshLayerEditorValues()
+            end,
+        })
+        -- left 标签
+        row:AddChild(UI.Label { text = "L:", fontSize = 10, fontColor = {180,180,180,255}, width = 14 })
+        -- left -
+        row:AddChild(UI.Button {
+            text = "-", fontSize = 12, width = 22, height = 22,
+            backgroundColor = {80, 120, 80, 200}, borderRadius = 3,
+            justifyContent = "center", alignItems = "center",
+            fontColor = {255,255,255,255},
+            onClick = function()
+                layerEditorData_[i].left = layerEditorData_[i].left - 0.5
+                ApplyLayerEditorPos(i)
+                RefreshLayerEditorValues()
+            end,
+        })
+        -- left 值显示
+        row:AddChild(UI.Label {
+            id = "le_left_" .. i, text = tostring(layer.left), fontSize = 11,
+            fontColor = {255,255,255,255}, width = 30, textAlign = "center",
+        })
+        -- left +
+        row:AddChild(UI.Button {
+            text = "+", fontSize = 12, width = 22, height = 22,
+            backgroundColor = {80, 120, 80, 200}, borderRadius = 3,
+            justifyContent = "center", alignItems = "center",
+            fontColor = {255,255,255,255},
+            onClick = function()
+                layerEditorData_[i].left = layerEditorData_[i].left + 0.5
+                ApplyLayerEditorPos(i)
+                RefreshLayerEditorValues()
+            end,
+        })
+        layerEditorPanel_:AddChild(row)
+    end
+
+    -- 导出按钮
+    layerEditorPanel_:AddChild(UI.Button {
+        text = "导出数据", fontSize = 12, marginTop = 8,
+        width = "100%", height = 28,
+        backgroundColor = {60, 100, 180, 220}, borderRadius = 4,
+        justifyContent = "center", alignItems = "center",
+        fontColor = {255,255,255,255},
+        onClick = function() ShowLayerEditorExport() end,
+    })
+end
+
+function RefreshLayerEditorValues()
+    if not layerEditorPanel_ then return end
+    for i, layer in ipairs(layerEditorData_) do
+        local topLabel = layerEditorPanel_:FindById("le_top_" .. i)
+        local leftLabel = layerEditorPanel_:FindById("le_left_" .. i)
+        if topLabel then topLabel:SetText(tostring(layer.top)) end
+        if leftLabel then leftLabel:SetText(tostring(layer.left)) end
+    end
+end
+
+function ApplyLayerEditorPos(idx)
+    if not mainMenuUIRoot_ then return end
+    local layer = layerEditorData_[idx]
+    local widget = mainMenuUIRoot_:FindById(layer.id)
+    if widget then
+        widget:SetStyle({
+            top = tostring(layer.top) .. "%",
+            left = tostring(layer.left) .. "%",
+        })
+    end
+end
+
+function ShowLayerEditorExport()
+    -- 生成可复制的数据文本
+    local lines = { "-- 图层位置数据 --" }
+    for _, layer in ipairs(layerEditorData_) do
+        table.insert(lines, layer.name .. ": top=" .. tostring(layer.top) .. "%, left=" .. tostring(layer.left) .. "%")
+    end
+    local exportText = table.concat(lines, "\n")
+
+    -- 弹出显示
+    if layerEditorExport_ then
+        layerEditorExport_:Destroy()
+    end
+    layerEditorExport_ = UI.Panel {
+        position = "absolute", top = "10%", left = "20%",
+        width = "60%",
+        backgroundColor = {0, 0, 0, 230},
+        borderRadius = 10, borderWidth = 1, borderColor = {100, 140, 255, 150},
+        paddingTop = 16, paddingBottom = 16,
+        paddingLeft = 16, paddingRight = 16,
+        flexDirection = "column", gap = 8,
+        children = {
+            UI.Label {
+                text = "复制以下数据发给AI：", fontSize = 13,
+                fontColor = {180, 200, 255, 255},
+            },
+            UI.Panel {
+                width = "100%",
+                backgroundColor = {30, 30, 50, 255},
+                borderRadius = 6,
+                paddingTop = 10, paddingBottom = 10,
+                paddingLeft = 10, paddingRight = 10,
+                children = {
+                    UI.Label {
+                        text = exportText, fontSize = 11,
+                        fontColor = {200, 255, 200, 255},
+                    },
+                },
+            },
+            UI.Button {
+                text = "关闭", fontSize = 12,
+                width = 80, height = 28,
+                backgroundColor = {100, 50, 50, 200}, borderRadius = 4,
+                justifyContent = "center", alignItems = "center",
+                fontColor = {255,255,255,255},
+                onClick = function()
+                    if layerEditorExport_ then
+                        layerEditorExport_:Destroy()
+                        layerEditorExport_ = nil
+                    end
+                end,
+            },
+        },
+    }
+    mainMenuUIRoot_:AddChild(layerEditorExport_)
 end
 
 -- ============================================================================
@@ -812,149 +1089,214 @@ end
 -- ============================================================================
 function ShowMainMenu()
     showMainMenu_ = true
+    mainMenuTime_ = 0
 
-    -- 按钮样式工厂 —— 紫藤/自然主题配色
-    local function MenuBtn(opts)
-        local baseColor = opts.color or "rgba(120, 80, 160, 0.55)"
-        local hoverColor = opts.hoverColor or "rgba(150, 100, 190, 0.75)"
-        return UI.Button {
-            text = opts.text,
-            fontSize = opts.fontSize or 18,
-            fontColor = "#f0e8ff",
-            width = opts.width or "100%",
-            height = opts.height or 64,
-            backgroundColor = baseColor,
-            borderRadius = 12,
-            borderWidth = 1,
-            borderColor = "rgba(200, 170, 240, 0.6)",
-            justifyContent = "center",
-            alignItems = "center",
-            hoverBackgroundColor = hoverColor,
-            onClick = opts.onClick,
-        }
+    -- 克莱因蓝半透明色
+    local KB = {0, 47, 167, 160}
+    local KB_LIGHT = {0, 47, 167, 120}
+    local KB_BORDER = {100, 140, 255, 100}
+
+    -- Live2D 图层（从下到上）：背景 → 人物 → 帘子 → 风铃 → 紫藤花 → 钢琴
+    -- 所有图层整体向左上偏移，防止右侧/底部露黑边
+    local layerBg = UI.Panel {
+        id = "l2d_bg",
+        position = "absolute", top = "0%", left = "0%",
+        width = "104%", height = "104%",
+        backgroundImage = "image/主界面背景图/背景.png",
+        backgroundFit = "cover",
+        pointerEvents = "none",
+    }
+    local layerChar = UI.Panel {
+        id = "l2d_char",
+        position = "absolute", top = "0%", left = "-0.5%",
+        width = "104%", height = "104%",
+        backgroundImage = "image/主界面背景图/人物1.png",
+        backgroundFit = "cover",
+        pointerEvents = "none",
+    }
+    local layerCurtain = UI.Panel {
+        id = "l2d_curtain",
+        position = "absolute", top = "0%", left = "-3%",
+        width = "104%", height = "104%",
+        backgroundImage = "image/主界面背景图/帘子.png",
+        backgroundFit = "cover",
+        pointerEvents = "none",
+    }
+    local layerChime = UI.Panel {
+        id = "l2d_chime",
+        position = "absolute", top = "0%", left = "-3%",
+        width = "104%", height = "104%",
+        backgroundImage = "image/主界面背景图/风铃.png",
+        backgroundFit = "cover",
+        pointerEvents = "none",
+    }
+    local layerWisteria = UI.Panel {
+        id = "l2d_wisteria",
+        position = "absolute", top = "0%", left = "-0.5%",
+        width = "104%", height = "104%",
+        backgroundImage = "image/主界面背景图/紫藤花.png",
+        backgroundFit = "cover",
+        pointerEvents = "none",
+    }
+    local layerPiano = UI.Panel {
+        id = "l2d_piano",
+        position = "absolute", top = "-3%", left = "-3%",
+        width = "104%", height = "104%",
+        backgroundImage = "image/主界面背景图/钢琴.png",
+        backgroundFit = "cover",
+        pointerEvents = "none",
+    }
+
+    -- 花瓣粒子容器（最前层，钢琴之上、UI之下）
+    local petalContainer = UI.Panel {
+        id = "l2d_petals",
+        position = "absolute", top = 0, left = 0,
+        width = "100%", height = "100%",
+        pointerEvents = "none",
+    }
+    -- 创建6个紫色花瓣
+    for i = 1, 6 do
+        petalContainer:AddChild(UI.Panel {
+            id = "petal_" .. i,
+            position = "absolute",
+            width = 5, height = 5,
+            borderRadius = 3,
+            backgroundColor = {180, 140, 220, math.random(120, 200)},
+            top = tostring(math.random(0, 80)) .. "%",
+            left = tostring(math.random(-10, 100)) .. "%",
+            pointerEvents = "none",
+        })
     end
 
-    -- 主菜单UI
-    mainMenuUIRoot_ = UI.Panel {
+    -- 右侧功能面板（景深效果目标）
+    local menuPanel = UI.Panel {
+        id = "mainMenuPanel",
         position = "absolute",
-        top = 0, left = 0,
-        width = "100%", height = "100%",
+        top = 30, right = 30,
+        width = "30%", height = "90%",
+        flexDirection = "column",
+        gap = 8,
         children = {
-            -- 背景图层
-            UI.Panel {
-                position = "absolute",
-                top = 0, left = 0,
-                width = "100%", height = "100%",
-                backgroundImage = "image/piano_garden_bg.png",
-                backgroundFit = "cover",
+            UI.Button {
+                width = "100%", height = "30%",
+                text = "关卡", fontSize = 22,
+                fontColor = {255, 255, 255, 230},
+                backgroundColor = KB, borderRadius = 10,
+                borderWidth = 1, borderColor = KB_BORDER,
+                justifyContent = "center", alignItems = "center",
+                rotate = -2,
+                onClick = function() EnterGameFromMenu() end,
             },
-            -- 右侧菜单面板（带半透明磨砂底色）
+            UI.Button {
+                width = "100%", flexGrow = 1,
+                text = "角色", fontSize = 18,
+                fontColor = {255, 255, 255, 230},
+                backgroundColor = KB, borderRadius = 10,
+                borderWidth = 1, borderColor = KB_BORDER,
+                justifyContent = "center", alignItems = "center",
+                rotate = -2, onClick = function() end,
+            },
+            UI.Button {
+                width = "100%", flexGrow = 1,
+                text = "商店", fontSize = 18,
+                fontColor = {255, 255, 255, 230},
+                backgroundColor = KB, borderRadius = 10,
+                borderWidth = 1, borderColor = KB_BORDER,
+                justifyContent = "center", alignItems = "center",
+                rotate = -2, onClick = function() end,
+            },
+            UI.Button {
+                width = "100%", flexGrow = 1,
+                text = "任务", fontSize = 18,
+                fontColor = {255, 255, 255, 230},
+                backgroundColor = KB, borderRadius = 10,
+                borderWidth = 1, borderColor = KB_BORDER,
+                justifyContent = "center", alignItems = "center",
+                rotate = -2, onClick = function() end,
+            },
             UI.Panel {
-                position = "absolute",
-                top = 0, right = 0,
-                width = "42%", height = "100%",
-                paddingTop = 20, paddingBottom = 20,
-                paddingLeft = 16, paddingRight = 16,
-                backgroundColor = "rgba(40, 20, 60, 0.35)",
-                justifyContent = "center",
-                alignItems = "stretch",
-                gap = 12,
+                width = "100%", flexGrow = 1,
+                flexDirection = "row", gap = 8, rotate = -2,
                 children = {
-                    -- 关卡（大按钮，占顶部）
-                    MenuBtn {
-                        text = "关  卡",
-                        fontSize = 22,
-                        height = 90,
-                        color = "rgba(100, 60, 150, 0.6)",
-                        hoverColor = "rgba(130, 80, 180, 0.8)",
-                        onClick = function()
-                            EnterGameFromMenu()
-                        end,
+                    UI.Button {
+                        flexGrow = 1, height = "100%",
+                        text = "炼金", fontSize = 16,
+                        fontColor = {255, 255, 255, 230},
+                        backgroundColor = KB, borderRadius = 10,
+                        borderWidth = 1, borderColor = KB_BORDER,
+                        justifyContent = "center", alignItems = "center",
+                        onClick = function() end,
                     },
-                    -- 下方两列布局
-                    UI.Panel {
-                        width = "100%",
-                        flexGrow = 1,
-                        flexDirection = "row",
-                        gap = 12,
-                        children = {
-                            -- 左列：背包（高）
-                            UI.Panel {
-                                width = "45%", height = "100%",
-                                children = {
-                                    MenuBtn {
-                                        text = "背  包",
-                                        height = "100%",
-                                        color = "rgba(80, 100, 140, 0.55)",
-                                        hoverColor = "rgba(100, 120, 170, 0.75)",
-                                        onClick = function() end,
-                                    },
-                                },
-                            },
-                            -- 右列：任务 / 商店 / 炼药+炼金+仓库
-                            UI.Panel {
-                                width = "55%", height = "100%",
-                                gap = 10,
-                                children = {
-                                    MenuBtn {
-                                        text = "任  务",
-                                        height = 56,
-                                        color = "rgba(60, 120, 100, 0.55)",
-                                        hoverColor = "rgba(80, 150, 120, 0.75)",
-                                        onClick = function() end,
-                                    },
-                                    MenuBtn {
-                                        text = "商  店",
-                                        height = 56,
-                                        color = "rgba(140, 90, 60, 0.55)",
-                                        hoverColor = "rgba(170, 110, 80, 0.75)",
-                                        onClick = function() end,
-                                    },
-                                    -- 底部三格横排
-                                    UI.Panel {
-                                        width = "100%",
-                                        flexGrow = 1,
-                                        flexDirection = "row",
-                                        gap = 8,
-                                        children = {
-                                            MenuBtn {
-                                                text = "炼药",
-                                                fontSize = 15,
-                                                width = "34%",
-                                                height = "100%",
-                                                color = "rgba(100, 60, 120, 0.55)",
-                                                hoverColor = "rgba(130, 80, 150, 0.75)",
-                                                onClick = function() end,
-                                            },
-                                            MenuBtn {
-                                                text = "炼金",
-                                                fontSize = 15,
-                                                width = "33%",
-                                                height = "100%",
-                                                color = "rgba(160, 120, 60, 0.55)",
-                                                hoverColor = "rgba(190, 150, 80, 0.75)",
-                                                onClick = function() end,
-                                            },
-                                            MenuBtn {
-                                                text = "仓库",
-                                                fontSize = 15,
-                                                width = "33%",
-                                                height = "100%",
-                                                color = "rgba(60, 90, 130, 0.55)",
-                                                hoverColor = "rgba(80, 110, 160, 0.75)",
-                                                onClick = function() end,
-                                            },
-                                        },
-                                    },
-                                },
-                            },
-                        },
+                    UI.Button {
+                        flexGrow = 1, height = "100%",
+                        text = "仓库", fontSize = 16,
+                        fontColor = {255, 255, 255, 230},
+                        backgroundColor = KB, borderRadius = 10,
+                        borderWidth = 1, borderColor = KB_BORDER,
+                        justifyContent = "center", alignItems = "center",
+                        onClick = function() end,
                     },
                 },
             },
         },
     }
+
+    -- 主菜单UI（图层堆叠）
+    mainMenuUIRoot_ = UI.Panel {
+        position = "absolute",
+        top = 0, left = 0,
+        width = "100%", height = "100%",
+        overflow = "hidden",
+        children = {
+            layerBg,
+            layerChar,
+            layerCurtain,
+            layerChime,
+            layerWisteria,
+            layerPiano,
+            petalContainer,
+            menuPanel,
+            -- 左上角返回标题按钮
+            UI.Button {
+                position = "absolute",
+                top = 16, left = 16,
+                text = "< 返回", fontSize = 14,
+                fontColor = {255, 255, 255, 220},
+                backgroundColor = {0, 0, 0, 120},
+                borderRadius = 6,
+                paddingLeft = 12, paddingRight = 12,
+                paddingTop = 6, paddingBottom = 6,
+                onClick = function()
+                    showMainMenu_ = false
+                    mainMenuUIRoot_ = nil
+                    ShowTransition(function() ShowTitleScreen() end)
+                end,
+            },
+        },
+    }
     UI.SetRoot(mainMenuUIRoot_)
+    -- 存储引用供动画使用
+    mainMenuUIRoot_.menuPanel = menuPanel
+    mainMenuUIRoot_.layerBg = layerBg
+    mainMenuUIRoot_.layerChar = layerChar
+    mainMenuUIRoot_.layerCurtain = layerCurtain
+    mainMenuUIRoot_.layerChime = layerChime
+    mainMenuUIRoot_.layerWisteria = layerWisteria
+    mainMenuUIRoot_.layerPiano = layerPiano
+    mainMenuUIRoot_.petalContainer = petalContainer
+
+    -- ===== 图层位置编辑器 =====
+    ---@type {name:string, id:string, top:number, left:number}[]
+    layerEditorData_ = {
+        { name = "背景",    id = "l2d_bg",        top = 0.0, left = 0.0 },
+        { name = "人物",    id = "l2d_char",      top = 0.0, left = -0.5 },
+        { name = "帘子",    id = "l2d_curtain",   top = 0.0, left = -3.0 },
+        { name = "风铃",    id = "l2d_chime",     top = 0.0, left = -3.0 },
+        { name = "紫藤花",  id = "l2d_wisteria",  top = 0.0, left = -0.5 },
+        { name = "钢琴",    id = "l2d_piano",     top = -3.0, left = -3.0 },
+    }
+    layerEditorVisible_ = false
+    BuildLayerEditor()
 end
 
 -- 从主菜单进入关卡选择（游戏主界面）
@@ -962,18 +1304,20 @@ function EnterGameFromMenu()
     showMainMenu_ = false
     mainMenuUIRoot_ = nil
 
-    -- 切换回游戏UI根
-    local uiRoot = UI.Panel {
-        width = "100%", height = "100%",
-        pointerEvents = "box-none",
-        children = { backButton_, topButtonBar_, mapBackButton_, skillButtonPanel_, charSwitchPanel_, skillPanelUI_, inventoryPanelUI_, escPopupUI_, SpriteEditor.GetPanel() }
-    }
-    UI.SetRoot(uiRoot)
+    -- 过场后切换到游戏界面
+    ShowTransition(function()
+        local uiRoot = UI.Panel {
+            width = "100%", height = "100%",
+            pointerEvents = "box-none",
+            children = { backButton_, topButtonBar_, mapBackButton_, skillButtonPanel_, charSwitchPanel_, skillPanelUI_, inventoryPanelUI_, escPopupUI_, SpriteEditor.GetPanel() }
+        }
+        UI.SetRoot(uiRoot)
 
-    -- 重新挂载GM控制台面板
-    local gmPanel, gmExportPanel = GMConsole.CreateUI()
-    if gmPanel then uiRoot:AddChild(gmPanel) end
-    if gmExportPanel then uiRoot:AddChild(gmExportPanel) end
+        -- 重新挂载GM控制台面板
+        local gmPanel, gmExportPanel = GMConsole.CreateUI()
+        if gmPanel then uiRoot:AddChild(gmPanel) end
+        if gmExportPanel then uiRoot:AddChild(gmExportPanel) end
+    end)
 end
 
 -- ============================================================================
@@ -1433,8 +1777,116 @@ end
 function HandleUpdate(eventType, eventData)
     local dt = eventData["TimeStep"]:GetFloat()
 
-    -- ========== 标题页面/主菜单时跳过所有游戏逻辑 ==========
-    if showTitleScreen_ or showMainMenu_ then return end
+    -- ========== 过场计时器 ==========
+    UpdateTransition(dt)
+
+    -- ========== 主菜单 Live2D 动画系统 ==========
+    if showMainMenu_ and mainMenuUIRoot_ and mainMenuUIRoot_.menuPanel then
+        mainMenuTime_ = (mainMenuTime_ or 0) + dt
+        local t = mainMenuTime_
+
+        -- 鼠标视差（各层不同深度）
+        local screenW = graphics:GetWidth()
+        local screenH = graphics:GetHeight()
+        local mx = input.mousePosition.x
+        local my = input.mousePosition.y
+        local nx = (mx - screenW * 0.5) / (screenW * 0.5)
+        local ny = (my - screenH * 0.5) / (screenH * 0.5)
+
+        -- 从编辑器数据读取 base 位置（允许实时调整）
+        local edBg   = layerEditorData_ and layerEditorData_[1] or { top = -3.0, left = -3.0 }
+        local edChar  = layerEditorData_ and layerEditorData_[2] or { top = -2.0, left = -5.0 }
+        local edCurt  = layerEditorData_ and layerEditorData_[3] or { top = -3.0, left = -3.0 }
+        local edChime = layerEditorData_ and layerEditorData_[4] or { top = -3.0, left = -3.0 }
+        local edWist  = layerEditorData_ and layerEditorData_[5] or { top = -3.0, left = -3.0 }
+        local edPiano = layerEditorData_ and layerEditorData_[6] or { top = -3.0, left = -3.0 }
+
+        -- 背景层：增大纵向视差
+        local bgOx = -nx * 2
+        local bgOy = -ny * 4
+        mainMenuUIRoot_.layerBg:SetStyle({
+            top = tostring(edBg.top + bgOy * 0.1) .. "%",
+            left = tostring(edBg.left + bgOx * 0.1) .. "%",
+        })
+
+        -- 人物层：呼吸+微晃头（视差减小）
+        local charBreath = math.sin(t * 1.2) * 0.15
+        local charHeadSway = math.sin(t * 0.4) * 0.2
+        local charParX = -nx * 1.5
+        local charParY = -ny * 1
+        mainMenuUIRoot_.layerChar:SetStyle({
+            top = tostring(edChar.top + charBreath * 0.15 + charParY * 0.04) .. "%",
+            left = tostring(edChar.left + charHeadSway * 0.1 + charParX * 0.04) .. "%",
+        })
+
+        -- 帘子层：轻微摆动（视差减小）
+        local curtainSway = math.sin(t * 0.8) * 0.4 + math.sin(t * 1.3) * 0.2
+        local curtainParX = -nx * 2
+        local curtainParY = -ny * 1
+        mainMenuUIRoot_.layerCurtain:SetStyle({
+            top = tostring(edCurt.top + math.sin(t * 0.6) * 0.2 + curtainParY * 0.04) .. "%",
+            left = tostring(edCurt.left + curtainSway * 0.25 + curtainParX * 0.04) .. "%",
+        })
+
+        -- 风铃层：随风摆动（视差增大，摆动幅度增大）
+        local chimeSway = math.sin(t * 1.5) * 1.5 + math.sin(t * 2.3) * 0.8 + math.sin(t * 3.1) * 0.4
+        local chimeParX = -nx * 10
+        local chimeParY = -ny * 6
+        mainMenuUIRoot_.layerChime:SetStyle({
+            top = tostring(edChime.top + math.abs(math.sin(t * 1.5)) * 0.6 + chimeParY * 0.12) .. "%",
+            left = tostring(edChime.left + chimeSway * 0.5 + chimeParX * 0.12) .. "%",
+        })
+
+        -- 紫藤花层：缓慢摆动，幅度加大（多频叠加，自然感）
+        local wistSway = math.sin(t * 0.5) * 1.2 + math.sin(t * 0.8) * 0.7 + math.sin(t * 1.2) * 0.3
+        local wistParX = -nx * 7
+        local wistParY = -ny * 3.5
+        mainMenuUIRoot_.layerWisteria:SetStyle({
+            top = tostring(edWist.top + math.sin(t * 0.3) * 0.4 + wistParY * 0.1) .. "%",
+            left = tostring(edWist.left + wistSway * 0.4 + wistParX * 0.1) .. "%",
+        })
+
+        -- 钢琴层：前景（视差减小）
+        local pianoParX = -nx * 1.5
+        local pianoParY = -ny * 1
+        mainMenuUIRoot_.layerPiano:SetStyle({
+            top = tostring(edPiano.top + pianoParY * 0.03) .. "%",
+            left = tostring(edPiano.left + pianoParX * 0.03) .. "%",
+        })
+
+        -- 按钮面板视差
+        local panelOx = -nx * 18
+        local panelOy = -ny * 4
+        mainMenuUIRoot_.menuPanel:SetStyle({
+            right = 30 - panelOx,
+            top = 30 + panelOy,
+        })
+
+        -- 花瓣粒子动画（6个花瓣，向右下飘落）
+        if mainMenuUIRoot_.petalContainer then
+            for i = 1, 6 do
+                local petal = mainMenuUIRoot_.petalContainer:FindById("petal_" .. i)
+                if petal then
+                    -- 每个花瓣有不同速度和起始相位
+                    local speed = 0.8 + (i * 0.3)
+                    local phase = i * 1.2
+                    -- 水平：向右飘（风向右）
+                    local px = ((t * speed * 8 + phase * 30) % 130) - 15
+                    -- 垂直：缓慢下落 + 轻微波动
+                    local py = ((t * speed * 3 + phase * 20) % 110) - 5
+                    local wave = math.sin(t * 2 + phase) * 3
+                    petal:SetStyle({
+                        left = tostring(px) .. "%",
+                        top = tostring(py + wave * 0.5) .. "%",
+                        opacity = (py > 90) and 0 or 1,
+                    })
+                end
+            end
+        end
+    end
+
+    -- ========== 标题页面/主菜单/过场时跳过所有游戏逻辑 ==========
+    if showTitleScreen_ or showMainMenu_ or transition_.active then return end
 
     -- ========== 返回按钮/顶部栏可见性 ==========
     local inLevel = not WorldMap.IsOnMap()
@@ -1460,26 +1912,25 @@ function HandleUpdate(eventType, eventData)
     if WorldMap.IsOnMap() then
         -- ESC键返回主菜单
         if input:GetKeyPress(KEY_ESCAPE) then
-            ShowMainMenu()
+            ShowTransition(function() ShowMainMenu() end)
             return
         end
 
-        -- 大地图界面：处理鼠标/触屏点击区域
-        local screenW = graphics:GetWidth()
-        local screenH = graphics:GetHeight()
-        local mouseX = input.mousePosition.x
-        local mouseY = input.mousePosition.y
+        -- 大地图界面：处理鼠标/触屏点击区域（适配 16:9 letterbox）
+        local lbOx, lbOy, lbW, lbH = Renderer.CalcLetterbox(graphics:GetWidth(), graphics:GetHeight())
+        local mouseX = input.mousePosition.x - lbOx
+        local mouseY = input.mousePosition.y - lbOy
         local clicked = input:GetMouseButtonPress(MOUSEB_LEFT)
 
         -- 触屏支持：用TouchBegin事件标记检测新触摸
         if not clicked and mapTouchPressed_ then
-            mouseX = mapTouchX_
-            mouseY = mapTouchY_
+            mouseX = mapTouchX_ - lbOx
+            mouseY = mapTouchY_ - lbOy
             clicked = true
         end
         mapTouchPressed_ = false
 
-        local selectedId = WorldMap.HandleMapInput(mouseX, mouseY, screenW, screenH, clicked)
+        local selectedId = WorldMap.HandleMapInput(mouseX, mouseY, lbW, lbH, clicked)
         if selectedId then
             LoadArea(selectedId)
         end
@@ -1826,7 +2277,9 @@ function HandleUpdate(eventType, eventData)
                     end
                     table.insert(iceCrystals_, {
                         crystals = crystals,
+                        x = baseX,
                         groundY = groundY,
+                        radius = ((ICE_CRYSTAL_COUNT - 1) / 2) * 0.6,
                         life = ICE_CRYSTAL_LIFETIME,
                         maxLife = ICE_CRYSTAL_LIFETIME,
                         power = power,
@@ -2423,8 +2876,9 @@ function HandlePostUpdate(eventType, eventData)
         local newX = camPos.x + (targetX - camPos.x) * lerpFactor
         local newY = camPos.y + (targetY - camPos.y) * lerpFactor
 
-        -- 相机边界钳制：到达地图左右边缘时固定不移动
-        local camHalfView = (graphics:GetWidth() / PIXELS_PER_UNIT) * 0.5
+        -- 相机边界钳制：到达地图左右边缘时固定不移动（使用16:9安全区域宽度）
+        local _, _, lbW, _ = Renderer.CalcLetterbox(graphics:GetWidth(), graphics:GetHeight())
+        local camHalfView = (lbW / PIXELS_PER_UNIT) * 0.5
         local camMinX = -MAP_HALF_WIDTH + camHalfView
         local camMaxX = MAP_HALF_WIDTH - camHalfView
         newX = math.max(camMinX, math.min(camMaxX, newX))
@@ -2434,2504 +2888,199 @@ function HandlePostUpdate(eventType, eventData)
 end
 
 -- ============================================================================
--- NanoVG 渲染
+-- NanoVG 渲染（委托给 Renderer 模块）
 -- ============================================================================
+
+--- 将 main.lua 局部变量同步到 GameState 共享表（供 Renderer/GameUI 模块读取）
+local function SyncToSharedState()
+    local S = GameState
+    S.nvg = nvg_
+    S.playerNode = playerNode_
+    S.cameraNode = cameraNode_
+    S.showTitleScreen = showTitleScreen_
+    S.showMainMenu = showMainMenu_
+    S.isCharging = isCharging_
+    S.chargeTimer = chargeTimer_
+    S.chargeReleased = chargeReleased_
+    S.isHealing = isHealing_
+    S.healTimer = healTimer_
+    S.currentCharacter = currentCharacter_
+    S.currentAnim = currentAnim_
+    S.animFrame = animFrame_
+    S.facingRight = facingRight_
+    S.onGround = onGround_
+    S.isHanging = isHanging_
+    S.wingShatterTimer = wingShatterTimer_
+    S.iceCrystals = iceCrystals_
+    S.platforms = platforms_
+    S.projectiles = projectiles_
+    S.parallaxLayers = parallaxLayers_
+    S.imgBackground = imgBackground_
+    S.imgPlatformArea = imgPlatformArea_
+    S.imgGroundArea = imgGroundArea_
+    S.imgIdle = imgIdle_
+    S.imgRun = imgRun_
+    S.imgJump = imgJump_
+    S.imgAttack = imgAttack_
+    S.imgBlock = imgBlock_
+    S.imgCharge = imgCharge_
+    S.imgHeal = imgHeal_
+    S.imgCrouch = imgCrouch_
+    S.imgCrouchWalk = imgCrouchWalk_
+    S.imgHit = imgHit_
+    S.img2Idle = img2Idle_
+    S.img2Run = img2Run_
+    S.img2Jump = img2Jump_
+    S.img2Attack = img2Attack_
+    S.img2Block = img2Block_
+    S.img2Burst = img2Burst_
+    S.img2Heal = img2Heal_
+    S.img2Crouch = img2Crouch_
+    S.img2CrouchWalk = img2CrouchWalk_
+    S.img2Hit = img2Hit_
+    S.imgAvatar1 = imgAvatar1_
+    S.imgAvatar2 = imgAvatar2_
+    S.iconChar1Q = iconChar1Q_
+    S.iconChar1E = iconChar1E_
+    S.iconChar2Q = iconChar2Q_
+    S.iconChar2E = iconChar2E_
+    S.imgWidth = imgWidth_
+    S.imgHeight = imgHeight_
+    S.playerHP = playerHP_
+    S.playerMaxHP = playerMaxHP_
+    S.playerMP = playerMP_
+    S.playerMaxMP = playerMaxMP_
+    S.lifestealBuffTimer = lifestealBuffTimer_
+    S.debugDraw = debugDraw_
+    S.editorMode = editorMode_
+    S.showSkillPanel = showSkillPanel_
+    S.showInventory = showInventory_
+    S.skillPanelUI = skillPanelUI_
+    S.inventoryPanelUI = inventoryPanelUI_
+    S.escPopupUI = escPopupUI_
+    S.skillPoints = skillPoints_
+    S.skillList = skillList_
+    S.skillList2 = skillList2_
+    S.inventoryItems = inventoryItems_
+    S.skillPanelCharCache = skillPanelCharCache_
+end
+
 function HandleRender(eventType, eventData)
     if nvg_ == nil then return end
-    -- 标题页面/主菜单时不绘制NanoVG内容
-    if showTitleScreen_ or showMainMenu_ then return end
-
-    local width = graphics:GetWidth()
-    local height = graphics:GetHeight()
-
-    nvgBeginFrame(nvg_, width, height, 1.0)
-
-    -- ========== 大地图界面：只绘制地图 ==========
-    if WorldMap.IsOnMap() then
-        WorldMap.DrawMap(width, height)
-        nvgEndFrame(nvg_)
-        return
-    end
-
-    -- 获取相机位置
-    local camPos = cameraNode_ and cameraNode_.worldPosition or Vector3(0, 0, -10)
-    local camX = camPos.x
-    local camY = camPos.y
-
-    -- 绘制背景
-    DrawBackground(width, height, camX)
-
-    -- 绘制平台（白盒）
-    DrawPlatforms(width, height, camX, camY)
-
-    -- 绘制投射物
-    DrawProjectiles(width, height, camX, camY)
-
-    -- 绘制蓄力特效（在玩家后面）
-    if isCharging_ then
-        if currentCharacter_ == 2 then
-            DrawChargeEffectChar2(width, height, camX, camY)
-        else
-            DrawChargeEffect(width, height, camX, camY)
-        end
-    end
-
-    -- 绘制治愈特效（在玩家后面）
-    if isHealing_ then
-        DrawHealEffect(width, height, camX, camY)
-    end
-
-    -- 绘制敌人
-    Enemy.Draw(width, height, camX, camY, SCREEN_WIDTH, SCREEN_HEIGHT, PIXELS_PER_UNIT)
-    BatEnemy.Draw(width, height, camX, camY, SCREEN_WIDTH, SCREEN_HEIGHT, PIXELS_PER_UNIT)
-    CastleEnemies.Draw(width, height, camX, camY, SCREEN_WIDTH, SCREEN_HEIGHT, PIXELS_PER_UNIT)
-
-    -- 绘制玩家
-    DrawPlayer(width, height, camX, camY)
-
-    -- 绘制地面冰晶
-    DrawIceCrystals(width, height, camX, camY)
-
-    -- 绘制 HP/MP 血条和魔力条（左上角，始终显示）
-    if not editorMode_ then
-        DrawHPMPBars(width, height)
-    end
-
-    -- 绘制调试信息
-    if not editorMode_ and debugDraw_ then
-        DrawDebugInfo(width, height)
-    end
-
-    -- 技能面板和背包面板已由UI系统绘制，不再使用NanoVG
-
-    -- 敌方血条（最上层绘制，不被角色和其他物件遮挡）
-    Enemy.DrawHealthBars(width, height, camX, camY, SCREEN_WIDTH, SCREEN_HEIGHT, PIXELS_PER_UNIT)
-    BatEnemy.DrawHealthBars(width, height, camX, camY, SCREEN_WIDTH, SCREEN_HEIGHT, PIXELS_PER_UNIT)
-    CastleEnemies.DrawHealthBars(width, height, camX, camY, SCREEN_WIDTH, SCREEN_HEIGHT, PIXELS_PER_UNIT)
-
-    -- 绘制GM控制台
-    GMConsole.Draw(width, height)
-
-    -- 切图编辑器（NanoVG预览部分）
-    if editorMode_ then
-        SpriteEditor.DrawPreview(width, height)
-    end
-
-    -- ESC弹窗已迁移到UI系统，无需NanoVG绘制
-
-    nvgEndFrame(nvg_)
+    SyncToSharedState()
+    Renderer.HandleRender(eventType, eventData)
 end
 
+
 -- ============================================================================
--- 绘制背景
+-- 渲染函数代理（实际实现在 Renderer.lua）
+-- 保留全局函数名以兼容其他模块的调用
 -- ============================================================================
+function PhysicsToScreen(physX, physY, camX, camY)
+    return Renderer.PhysicsToScreen(physX, physY, camX, camY)
+end
+
 function DrawBackground(width, height, camX)
-    camX = camX or 0
-
-    -- 多层视差背景（冰原区域）
-    if #parallaxLayers_ > 0 then
-        for _, layer in ipairs(parallaxLayers_) do
-            if layer.img and layer.img > 0 then
-                -- 图片宽度=2倍屏幕宽以实现无缝滚动
-                local imgW = width * 2
-                local imgH = height
-                -- 根据相机X偏移乘以视差因子计算水平位移（像素）
-                local offsetX = -(camX * PIXELS_PER_UNIT * layer.factor)
-                -- 循环平铺：让偏移量在 [-imgW, 0] 之间循环
-                offsetX = offsetX % imgW
-                if offsetX > 0 then offsetX = offsetX - imgW end
-
-                -- 绘制两份以确保无缝
-                local paint = nvgImagePattern(nvg_, offsetX, 0, imgW, imgH, 0, layer.img, 1.0)
-                nvgBeginPath(nvg_)
-                nvgRect(nvg_, 0, 0, width, height)
-                nvgFillPaint(nvg_, paint)
-                nvgFill(nvg_)
-
-                -- 如果右侧有空隙则补一份
-                if offsetX + imgW < width then
-                    local paint2 = nvgImagePattern(nvg_, offsetX + imgW, 0, imgW, imgH, 0, layer.img, 1.0)
-                    nvgBeginPath(nvg_)
-                    nvgRect(nvg_, offsetX + imgW, 0, width - (offsetX + imgW), height)
-                    nvgFillPaint(nvg_, paint2)
-                    nvgFill(nvg_)
-                end
-            end
-        end
-    elseif imgBackground_ and imgBackground_ > 0 then
-        -- 单层背景（古堡/森林等无视差的区域）
-        local paint = nvgImagePattern(nvg_, 0, 0, width, height, 0, imgBackground_, 1.0)
-        nvgBeginPath(nvg_)
-        nvgRect(nvg_, 0, 0, width, height)
-        nvgFillPaint(nvg_, paint)
-        nvgFill(nvg_)
-    else
-        -- fallback: 纯色渐变背景
-        nvgBeginPath(nvg_)
-        nvgRect(nvg_, 0, 0, width, height)
-        local bg = nvgLinearGradient(nvg_, 0, 0, 0, height,
-            nvgRGBA(20, 30, 60, 255),
-            nvgRGBA(40, 60, 120, 255))
-        nvgFillPaint(nvg_, bg)
-        nvgFill(nvg_)
-    end
+    Renderer.DrawBackground(width, height, camX)
 end
 
--- ============================================================================
--- 绘制平台（古堡石质高台风格）
--- ============================================================================
 function DrawPlatforms(width, height, camX, camY)
-    local sx = width / SCREEN_WIDTH
-    local sy = height / SCREEN_HEIGHT
-    for _, p in ipairs(platforms_) do
-        local screenX, screenY = PhysicsToScreen(p.x, p.y, camX, camY)
-        local w = p.width * PIXELS_PER_UNIT
-        local h = p.height * PIXELS_PER_UNIT
-
-        -- 转换为屏幕坐标
-        screenX = screenX * sx
-        screenY = screenY * sy
-        w = w * sx
-        h = h * sy
-
-        local isGround = (p.width >= 20)  -- 地面平台
-
-        if isGround then
-            local groundTop = screenY - h / 2
-            local groundLeft = screenX - w / 2
-
-            if imgGroundArea_ and imgGroundArea_ > 0 then
-                -- 使用区域地面贴图平铺
-                local tileW = 64 * sx  -- 每块贴图宽度
-                local tileH = h
-                local startX = groundLeft
-                while startX < groundLeft + w do
-                    local drawW = math.min(tileW, groundLeft + w - startX)
-                    local paint = nvgImagePattern(nvg_, startX, groundTop, tileW, tileH, 0, imgGroundArea_, 1.0)
-                    nvgBeginPath(nvg_)
-                    nvgRect(nvg_, startX, groundTop, drawW, tileH)
-                    nvgFillPaint(nvg_, paint)
-                    nvgFill(nvg_)
-                    startX = startX + tileW
-                end
-                -- 顶部边缘高光
-                nvgBeginPath(nvg_)
-                nvgRect(nvg_, groundLeft, groundTop, w, 2 * sy)
-                nvgFillColor(nvg_, nvgRGBA(255, 255, 255, 40))
-                nvgFill(nvg_)
-            else
-                -- 古堡地面：简洁渐变地板
-                nvgBeginPath(nvg_)
-                nvgRect(nvg_, groundLeft, groundTop, w, h)
-                local stoneGrad = nvgLinearGradient(nvg_, 0, groundTop, 0, groundTop + h,
-                    nvgRGBA(60, 40, 35, 255),
-                    nvgRGBA(40, 25, 20, 255))
-                nvgFillPaint(nvg_, stoneGrad)
-                nvgFill(nvg_)
-
-                -- 石砖纹理线条
-                nvgStrokeColor(nvg_, nvgRGBA(30, 18, 15, 150))
-                nvgStrokeWidth(nvg_, 1.0 * sx)
-                local brickW = 24 * sx
-                local brickH = h / 2
-                for row = 0, 1 do
-                    local yy = groundTop + row * brickH
-                    local offsetBrick = (row % 2 == 0) and 0 or (brickW / 2)
-                    local startX = groundLeft + offsetBrick
-                    while startX < groundLeft + w do
-                        nvgBeginPath(nvg_)
-                        nvgRect(nvg_, startX, yy, brickW, brickH)
-                        nvgStroke(nvg_)
-                        startX = startX + brickW
-                    end
-                end
-
-                -- 地毯（暗红色带金边）
-                local carpetW = w * 0.6
-                local carpetH = h * 0.4
-                local carpetX = screenX - carpetW / 2
-                local carpetY = groundTop + 2 * sy
-                nvgBeginPath(nvg_)
-                nvgRect(nvg_, carpetX, carpetY, carpetW, carpetH)
-                local carpetGrad = nvgLinearGradient(nvg_, carpetX, carpetY, carpetX + carpetW, carpetY,
-                    nvgRGBA(120, 20, 30, 200),
-                    nvgRGBA(80, 15, 20, 200))
-                nvgFillPaint(nvg_, carpetGrad)
-                nvgFill(nvg_)
-                -- 金色边框
-                nvgStrokeColor(nvg_, nvgRGBA(180, 140, 60, 180))
-                nvgStrokeWidth(nvg_, 1.5 * sx)
-                nvgStroke(nvg_)
-            end
-        elseif imgPlatformArea_ and imgPlatformArea_ > 0 then
-            -- 区域图片平台（冰封/藤蔓石块等）
-            local platTop = screenY - h / 2
-            local drawW = w * 1.15  -- 图片比碰撞框稍宽
-            local drawH = h * 2.2   -- 图片比碰撞框更高（显示细节）
-            local drawX = screenX - drawW / 2
-            local drawY = platTop - drawH * 0.25  -- 向上偏移，让平台面对齐碰撞顶部
-
-            local paint = nvgImagePattern(nvg_, drawX, drawY, drawW, drawH, 0, imgPlatformArea_, 1.0)
-            nvgBeginPath(nvg_)
-            nvgRoundedRect(nvg_, drawX, drawY, drawW, drawH, 4 * sx)
-            nvgFillPaint(nvg_, paint)
-            nvgFill(nvg_)
-        else
-            -- 空中平台：华丽巴洛克金色高台（参考古堡浮空平台素材）
-            local platTop = screenY - h / 2
-            local platH = h
-            local left = screenX - w / 2
-            local right = screenX + w / 2
-
-            -- 平台阴影（柔和投影）
-            nvgBeginPath(nvg_)
-            nvgRect(nvg_, left + 4 * sx, platTop + 4 * sy, w, platH + 8 * sy)
-            nvgFillColor(nvg_, nvgRGBA(0, 0, 0, 100))
-            nvgFill(nvg_)
-
-            -- === 主体：深色木质/石质基座 ===
-            nvgBeginPath(nvg_)
-            nvgRect(nvg_, left, platTop, w, platH)
-            local bodyGrad = nvgLinearGradient(nvg_, 0, platTop, 0, platTop + platH,
-                nvgRGBA(50, 35, 25, 255),
-                nvgRGBA(30, 20, 15, 255))
-            nvgFillPaint(nvg_, bodyGrad)
-            nvgFill(nvg_)
-
-            -- === 顶部金色平台面（略宽于主体） ===
-            local topH = math.max(4 * sy, platH * 0.25)
-            nvgBeginPath(nvg_)
-            nvgRect(nvg_, left - 3 * sx, platTop, w + 6 * sx, topH)
-            local goldTopGrad = nvgLinearGradient(nvg_, 0, platTop, 0, platTop + topH,
-                nvgRGBA(210, 175, 90, 255),
-                nvgRGBA(160, 120, 50, 255))
-            nvgFillPaint(nvg_, goldTopGrad)
-            nvgFill(nvg_)
-
-            -- 顶面高光线
-            nvgBeginPath(nvg_)
-            nvgRect(nvg_, left - 3 * sx, platTop, w + 6 * sx, 1.5 * sy)
-            nvgFillColor(nvg_, nvgRGBA(245, 220, 140, 200))
-            nvgFill(nvg_)
-
-            -- === 金色下沿装饰边框 ===
-            local bottomBorderH = math.max(3 * sy, platH * 0.2)
-            local borderY = platTop + platH - bottomBorderH
-            nvgBeginPath(nvg_)
-            nvgRect(nvg_, left - 2 * sx, borderY, w + 4 * sx, bottomBorderH)
-            local goldBotGrad = nvgLinearGradient(nvg_, 0, borderY, 0, borderY + bottomBorderH,
-                nvgRGBA(180, 140, 55, 255),
-                nvgRGBA(130, 95, 35, 255))
-            nvgFillPaint(nvg_, goldBotGrad)
-            nvgFill(nvg_)
-
-            -- === 中间金色浮雕纹饰 ===
-            local ornamentCount = math.max(1, math.floor(w / (28 * sx)))
-            local ornSpacing = w / (ornamentCount + 1)
-            for i = 1, ornamentCount do
-                local ox = left + ornSpacing * i
-                local oy = platTop + platH * 0.5
-
-                local ornSize = math.min(6 * sx, ornSpacing * 0.35)
-
-                -- 中心菱形纹章
-                nvgBeginPath(nvg_)
-                nvgMoveTo(nvg_, ox, oy - ornSize)
-                nvgLineTo(nvg_, ox + ornSize, oy)
-                nvgLineTo(nvg_, ox, oy + ornSize)
-                nvgLineTo(nvg_, ox - ornSize, oy)
-                nvgClosePath(nvg_)
-                nvgFillColor(nvg_, nvgRGBA(190, 150, 60, 200))
-                nvgFill(nvg_)
-
-                -- 菱形内部小点
-                nvgBeginPath(nvg_)
-                nvgCircle(nvg_, ox, oy, ornSize * 0.3)
-                nvgFillColor(nvg_, nvgRGBA(220, 185, 90, 220))
-                nvgFill(nvg_)
-
-                -- 两侧卷曲装饰线
-                nvgStrokeColor(nvg_, nvgRGBA(180, 140, 55, 160))
-                nvgStrokeWidth(nvg_, 1.2 * sx)
-                nvgBeginPath(nvg_)
-                nvgMoveTo(nvg_, ox - ornSize * 1.3, oy)
-                nvgQuadTo(nvg_, ox - ornSize * 2.0, oy - ornSize * 0.6,
-                          ox - ornSize * 2.5, oy)
-                nvgStroke(nvg_)
-                nvgBeginPath(nvg_)
-                nvgMoveTo(nvg_, ox + ornSize * 1.3, oy)
-                nvgQuadTo(nvg_, ox + ornSize * 2.0, oy - ornSize * 0.6,
-                          ox + ornSize * 2.5, oy)
-                nvgStroke(nvg_)
-            end
-
-            -- === 两端金色柱头装饰 ===
-            for side = -1, 1, 2 do
-                local capX = (side < 0) and left or (right - 5 * sx)
-                local capW = 5 * sx
-                nvgBeginPath(nvg_)
-                nvgRect(nvg_, capX, platTop, capW, platH)
-                local capGrad = nvgLinearGradient(nvg_, capX, platTop, capX + capW, platTop,
-                    nvgRGBA(170, 130, 45, 255),
-                    nvgRGBA(130, 95, 35, 255))
-                nvgFillPaint(nvg_, capGrad)
-                nvgFill(nvg_)
-                -- 端柱内侧高光
-                local hlX = (side < 0) and (capX + capW - 1.5 * sx) or capX
-                nvgBeginPath(nvg_)
-                nvgRect(nvg_, hlX, platTop + 2 * sy, 1.5 * sx, platH - 4 * sy)
-                nvgFillColor(nvg_, nvgRGBA(220, 185, 90, 120))
-                nvgFill(nvg_)
-            end
-
-            -- === 底部中央垂饰（倒三角+圆球） ===
-            local pendantX = screenX
-            local pendantTop = platTop + platH
-            local pendantW = 6 * sx
-            local pendantH = 10 * sy
-            nvgBeginPath(nvg_)
-            nvgMoveTo(nvg_, pendantX - pendantW, pendantTop)
-            nvgLineTo(nvg_, pendantX + pendantW, pendantTop)
-            nvgLineTo(nvg_, pendantX, pendantTop + pendantH)
-            nvgClosePath(nvg_)
-            nvgFillColor(nvg_, nvgRGBA(160, 120, 45, 230))
-            nvgFill(nvg_)
-            nvgBeginPath(nvg_)
-            nvgCircle(nvg_, pendantX, pendantTop + pendantH + 2.5 * sy, 2.5 * sx)
-            nvgFillColor(nvg_, nvgRGBA(190, 150, 60, 240))
-            nvgFill(nvg_)
-
-            -- === 整体金色边框轮廓 ===
-            nvgBeginPath(nvg_)
-            nvgRect(nvg_, left - 3 * sx, platTop, w + 6 * sx, platH)
-            nvgStrokeColor(nvg_, nvgRGBA(200, 160, 65, 180))
-            nvgStrokeWidth(nvg_, 1.5 * sx)
-            nvgStroke(nvg_)
-        end
-    end
+    Renderer.DrawPlatforms(width, height, camX, camY)
 end
 
--- ============================================================================
--- 绘制投射物（冰晶 - 水平飞行，不旋转，周围雾气）
--- ============================================================================
 function DrawProjectiles(width, height, camX, camY)
-    local sx = width / SCREEN_WIDTH
-    local sy = height / SCREEN_HEIGHT
-
-    for _, p in ipairs(projectiles_) do
-        local screenX, screenY = PhysicsToScreen(p.x, p.y, camX, camY)
-        screenX = screenX * sx
-        screenY = screenY * sy
-        local size = p.size * PIXELS_PER_UNIT * sx
-
-        -- 周围环绕的雾气（多层半透明圆）
-        local fogPhase = (PROJECTILE_LIFETIME - p.life) * 4.0
-        for i = 1, 4 do
-            local angle = fogPhase + i * 1.57  -- 等间距分布
-            local fogDist = size * (0.8 + math.sin(fogPhase + i) * 0.3)
-            local fogX = screenX + math.cos(angle) * fogDist
-            local fogY = screenY + math.sin(angle) * fogDist * 0.5  -- 扁平化
-            local fogR = size * (0.4 + math.sin(fogPhase * 0.7 + i * 2) * 0.15)
-            nvgBeginPath(nvg_)
-            nvgCircle(nvg_, fogX, fogY, fogR)
-            nvgFillColor(nvg_, nvgRGBA(180, 220, 255, 50 + math.floor(math.sin(fogPhase + i) * 20)))
-            nvgFill(nvg_)
-        end
-
-        -- 冰晶外发光
-        nvgBeginPath(nvg_)
-        nvgCircle(nvg_, screenX, screenY, size * 1.8)
-        nvgFillColor(nvg_, nvgRGBA(100, 180, 255, 30))
-        nvgFill(nvg_)
-
-        -- 冰晶主体菱形（水平固定方向，不旋转）
-        nvgBeginPath(nvg_)
-        nvgMoveTo(nvg_, screenX - size, screenY)
-        nvgLineTo(nvg_, screenX, screenY - size * 0.6)
-        nvgLineTo(nvg_, screenX + size, screenY)
-        nvgLineTo(nvg_, screenX, screenY + size * 0.6)
-        nvgClosePath(nvg_)
-        local iceGrad = nvgLinearGradient(nvg_,
-            screenX - size, screenY,
-            screenX + size, screenY,
-            nvgRGBA(200, 235, 255, 255),
-            nvgRGBA(100, 180, 255, 220))
-        nvgFillPaint(nvg_, iceGrad)
-        nvgFill(nvg_)
-
-        -- 冰晶边框高光
-        nvgStrokeColor(nvg_, nvgRGBA(220, 245, 255, 200))
-        nvgStrokeWidth(nvg_, 1.2)
-        nvgStroke(nvg_)
-
-        -- 冰晶中心亮点
-        nvgBeginPath(nvg_)
-        nvgCircle(nvg_, screenX, screenY, size * 0.2)
-        nvgFillColor(nvg_, nvgRGBA(255, 255, 255, 200))
-        nvgFill(nvg_)
-    end
+    Renderer.DrawProjectiles(width, height, camX, camY)
 end
 
--- ============================================================================
--- 绘制蓄力法阵特效（超华丽粒子+旋转魔法阵+冰晶环绕）
--- ============================================================================
 function DrawChargeEffect(width, height, camX, camY)
-    if playerNode_ == nil then return end
-
-    local pos = playerNode_.position2D
-    local screenX, screenY = PhysicsToScreen(pos.x, pos.y, camX, camY)
-    local sx = width / SCREEN_WIDTH
-    local sy = height / SCREEN_HEIGHT
-    screenX = screenX * sx
-    screenY = screenY * sy
-
-    -- 蓄力进度（0~1）
-    local progress = math.min(chargeTimer_ / CHARGE_MAX_DURATION, 1.0)
-    local dir = facingRight_ and 1 or -1
-    local t = chargeTimer_
-
-    -- ====== 1) 角色身体光辉（全身发光底层） ======
-    local glowRadius = 40 * sx * (0.8 + progress * 0.5)
-    local glowCenterY = screenY - 30 * sy
-    local bodyGlowAlpha = math.floor(30 + progress * 80)
-    local glowGrad = nvgRadialGradient(nvg_, screenX, glowCenterY, glowRadius * 0.2, glowRadius,
-        nvgRGBA(150, 220, 255, bodyGlowAlpha), nvgRGBA(100, 180, 255, 0))
-    nvgBeginPath(nvg_)
-    nvgCircle(nvg_, screenX, glowCenterY, glowRadius)
-    nvgFillPaint(nvg_, glowGrad)
-    nvgFill(nvg_)
-
-    -- ====== 2) 脚底冰霜扩散圈（双层呼吸动画） ======
-    local bodyRadius = 38 * sx
-    local frostPulse = 1.0 + math.sin(t * 4) * 0.15
-    -- 外圈
-    local frostR1 = bodyRadius * (1.0 + progress * 0.6) * frostPulse
-    nvgBeginPath(nvg_)
-    nvgEllipse(nvg_, screenX, screenY, frostR1, frostR1 * 0.22)
-    nvgStrokeColor(nvg_, nvgRGBA(120, 200, 255, math.floor((50 + progress * 120) * frostPulse)))
-    nvgStrokeWidth(nvg_, 1.5 + progress * 2)
-    nvgStroke(nvg_)
-    -- 内圈（反向呼吸）
-    local frostR2 = bodyRadius * (0.6 + progress * 0.3) * (2.0 - frostPulse)
-    nvgBeginPath(nvg_)
-    nvgEllipse(nvg_, screenX, screenY, frostR2, frostR2 * 0.22)
-    nvgStrokeColor(nvg_, nvgRGBA(180, 235, 255, math.floor(40 + progress * 80)))
-    nvgStrokeWidth(nvg_, 1.0 + progress)
-    nvgStroke(nvg_)
-    -- 脚底冰霜填充（半透明冰面）
-    if progress > 0.3 then
-        local iceAlpha = math.floor((progress - 0.3) / 0.7 * 60)
-        nvgBeginPath(nvg_)
-        nvgEllipse(nvg_, screenX, screenY, frostR1 * 0.8, frostR1 * 0.18)
-        nvgFillColor(nvg_, nvgRGBA(180, 230, 255, iceAlpha))
-        nvgFill(nvg_)
-    end
-
-    -- ====== 3) 角色周围浮动冰晶（大中小三层） ======
-    -- 大冰晶（缓慢旋转，靠近身体）
-    local bigCount = math.floor(2 + progress * 3)
-    for i = 1, bigCount do
-        local angle = (i / bigCount) * math.pi * 2 + t * 0.6
-        local dist = bodyRadius * (0.9 + math.sin(t * 1.5 + i * 2.3) * 0.2)
-        local cx = screenX + math.cos(angle) * dist
-        local cy = glowCenterY + math.sin(angle) * dist * 0.5
-        cy = cy + math.sin(t * 2 + i * 1.7) * 8 * sy
-
-        local cSize = (5 + progress * 5) * sx
-        local cAlpha = math.floor(160 + progress * 90)
-
-        nvgSave(nvg_)
-        nvgTranslate(nvg_, cx, cy)
-        nvgRotate(nvg_, t * 1.5 + i * 1.2)
-        -- 冰晶主体（六边形）
-        nvgBeginPath(nvg_)
-        for vi = 0, 5 do
-            local va = (vi / 6) * math.pi * 2
-            local vr = cSize * (vi % 2 == 0 and 1.0 or 0.6)
-            if vi == 0 then
-                nvgMoveTo(nvg_, math.cos(va) * vr, math.sin(va) * vr)
-            else
-                nvgLineTo(nvg_, math.cos(va) * vr, math.sin(va) * vr)
-            end
-        end
-        nvgClosePath(nvg_)
-        nvgFillColor(nvg_, nvgRGBA(160, 225, 255, cAlpha))
-        nvgFill(nvg_)
-        nvgStrokeColor(nvg_, nvgRGBA(220, 245, 255, cAlpha))
-        nvgStrokeWidth(nvg_, 1.0)
-        nvgStroke(nvg_)
-        -- 内部高光
-        nvgBeginPath(nvg_)
-        nvgMoveTo(nvg_, -cSize * 0.2, -cSize * 0.5)
-        nvgLineTo(nvg_, cSize * 0.1, -cSize * 0.1)
-        nvgLineTo(nvg_, -cSize * 0.1, cSize * 0.2)
-        nvgClosePath(nvg_)
-        nvgFillColor(nvg_, nvgRGBA(255, 255, 255, math.floor(cAlpha * 0.4)))
-        nvgFill(nvg_)
-        nvgRestore(nvg_)
-    end
-
-    -- 中冰晶（快速旋转，中层轨道）
-    local midCount = math.floor(4 + progress * 6)
-    for i = 1, midCount do
-        local angle = (i / midCount) * math.pi * 2 + t * (1.2 + i * 0.1)
-        local dist = bodyRadius * (1.2 + math.sin(t * 2.5 + i * 1.1) * 0.3)
-        local cx = screenX + math.cos(angle) * dist
-        local cy = glowCenterY + math.sin(angle) * dist * 0.55
-        cy = cy + math.sin(t * 3.5 + i * 2.5) * 5 * sy
-
-        local cSize = (2.5 + progress * 3) * sx
-        local cAlpha = math.floor((120 + progress * 130) * (0.6 + math.sin(t * 4 + i * 1.8) * 0.4))
-
-        nvgSave(nvg_)
-        nvgTranslate(nvg_, cx, cy)
-        nvgRotate(nvg_, t * 2.5 + i * 0.9)
-        -- 菱形
-        nvgBeginPath(nvg_)
-        nvgMoveTo(nvg_, 0, -cSize * 1.3)
-        nvgLineTo(nvg_, cSize * 0.45, 0)
-        nvgLineTo(nvg_, 0, cSize * 1.3)
-        nvgLineTo(nvg_, -cSize * 0.45, 0)
-        nvgClosePath(nvg_)
-        nvgFillColor(nvg_, nvgRGBA(180, 235, 255, cAlpha))
-        nvgFill(nvg_)
-        nvgRestore(nvg_)
-    end
-
-    -- 小微粒（快速散布，外层轨道，闪烁）
-    local dustCount = math.floor(8 + progress * 16)
-    for i = 1, dustCount do
-        local angle = (i / dustCount) * math.pi * 2 + t * (2.0 + i * 0.05)
-        local dist = bodyRadius * (1.0 + progress * 0.8 + math.sin(t * 3 + i * 0.9) * 0.4)
-        local px = screenX + math.cos(angle) * dist
-        local py = glowCenterY + math.sin(angle) * dist * 0.45
-        py = py + math.sin(t * 5 + i * 1.3) * 4 * sy
-        local pSize = (1 + math.sin(t * 6 + i * 2.1) * 0.5) * sx * (1 + progress)
-        local pAlpha = math.floor((80 + progress * 140) * (0.3 + math.sin(t * 7 + i * 3.1) * 0.7))
-        if pAlpha > 0 then
-            nvgBeginPath(nvg_)
-            nvgCircle(nvg_, px, py, pSize)
-            nvgFillColor(nvg_, nvgRGBA(200, 240, 255, pAlpha))
-            nvgFill(nvg_)
-        end
-    end
-
-    -- ====== 4) 竖立椭圆形法阵（角色前方，水平压缩模拟竖立透视） ======
-    local circleOffX = dir * 65 * sx
-    local circleX = screenX + circleOffX
-    local circleY = screenY - 22 * sy
-    local baseRadius = 28 * sx
-    local radius = baseRadius * (0.5 + progress * 0.8)
-    local rotation = t * 2.5
-    local alpha = math.floor(130 + progress * 125)
-    local ellipseScaleX = 0.45  -- 水平压缩比例，模拟竖立椭圆
-
-    -- 法阵外层光晕（椭圆形）
-    nvgSave(nvg_)
-    nvgTranslate(nvg_, circleX, circleY)
-    nvgScale(nvg_, ellipseScaleX, 1.0)
-    local haloGrad = nvgRadialGradient(nvg_, 0, 0, radius * 0.5, radius * 1.5,
-        nvgRGBA(100, 200, 255, math.floor(alpha * 0.3)), nvgRGBA(100, 200, 255, 0))
-    nvgBeginPath(nvg_)
-    nvgCircle(nvg_, 0, 0, radius * 1.5)
-    nvgFillPaint(nvg_, haloGrad)
-    nvgFill(nvg_)
-    nvgRestore(nvg_)
-
-    nvgSave(nvg_)
-    nvgTranslate(nvg_, circleX, circleY)
-    nvgScale(nvg_, ellipseScaleX, 1.0)
-    nvgRotate(nvg_, rotation)
-
-    -- 外圈
-    nvgBeginPath(nvg_)
-    nvgCircle(nvg_, 0, 0, radius * 1.2)
-    nvgStrokeColor(nvg_, nvgRGBA(100, 200, 255, alpha))
-    nvgStrokeWidth(nvg_, 2 + progress * 2.5)
-    nvgStroke(nvg_)
-
-    -- 中圈
-    nvgBeginPath(nvg_)
-    nvgCircle(nvg_, 0, 0, radius * 0.85)
-    nvgStrokeColor(nvg_, nvgRGBA(150, 230, 255, alpha))
-    nvgStrokeWidth(nvg_, 1.5 + progress)
-    nvgStroke(nvg_)
-
-    -- 六芒星
-    for i = 0, 5 do
-        local angle1 = (i / 6) * math.pi * 2
-        local angle2 = ((i + 2) / 6) * math.pi * 2
-        local x1 = math.cos(angle1) * radius
-        local y1 = math.sin(angle1) * radius
-        local x2 = math.cos(angle2) * radius
-        local y2 = math.sin(angle2) * radius
-        nvgBeginPath(nvg_)
-        nvgMoveTo(nvg_, x1, y1)
-        nvgLineTo(nvg_, x2, y2)
-        nvgStrokeColor(nvg_, nvgRGBA(180, 240, 255, alpha))
-        nvgStrokeWidth(nvg_, 1.5 + progress * 1.5)
-        nvgStroke(nvg_)
-    end
-    nvgRestore(nvg_)
-
-    -- 内层反向旋转符文圈（同样椭圆压缩）
-    nvgSave(nvg_)
-    nvgTranslate(nvg_, circleX, circleY)
-    nvgScale(nvg_, ellipseScaleX, 1.0)
-    nvgRotate(nvg_, -rotation * 0.7)
-    local innerR = radius * 0.55
-    -- 三角形符文
-    for i = 0, 2 do
-        local a1 = (i / 3) * math.pi * 2
-        local a2 = ((i + 1) / 3) * math.pi * 2
-        nvgBeginPath(nvg_)
-        nvgMoveTo(nvg_, math.cos(a1) * innerR, math.sin(a1) * innerR)
-        nvgLineTo(nvg_, math.cos(a2) * innerR, math.sin(a2) * innerR)
-        nvgStrokeColor(nvg_, nvgRGBA(200, 245, 255, math.floor(alpha * 0.7)))
-        nvgStrokeWidth(nvg_, 1.0 + progress)
-        nvgStroke(nvg_)
-    end
-    -- 中心光点（脉冲）
-    local pulseSize = radius * 0.12 * (1 + math.sin(t * 10) * 0.4)
-    nvgBeginPath(nvg_)
-    nvgCircle(nvg_, 0, 0, pulseSize)
-    nvgFillColor(nvg_, nvgRGBA(240, 255, 255, 220 + math.floor(progress * 35)))
-    nvgFill(nvg_)
-    nvgRestore(nvg_)
-
-    -- 法阵周围小光点环绕（椭圆轨道）
-    local dotCount = math.floor(6 + progress * 6)
-    for i = 1, dotCount do
-        local da = (i / dotCount) * math.pi * 2 + t * 3
-        local dd = radius * (1.3 + math.sin(t * 4 + i * 2) * 0.2)
-        local dx = circleX + math.cos(da) * dd * ellipseScaleX
-        local dy = circleY + math.sin(da) * dd
-        local ds = (1.5 + math.sin(t * 8 + i * 3) * 0.8) * sx
-        nvgBeginPath(nvg_)
-        nvgCircle(nvg_, dx, dy, ds)
-        nvgFillColor(nvg_, nvgRGBA(220, 250, 255, math.floor(150 * (0.5 + math.sin(t * 6 + i) * 0.5))))
-        nvgFill(nvg_)
-    end
-
-    -- ====== 5) 螺旋冰晶轨迹（环绕角色的双螺旋上升光带） ======
-    if progress > 0.2 then
-        local spiralAlpha = (progress - 0.2) / 0.8
-        local spiralCount = 2  -- 双螺旋
-        for s = 1, spiralCount do
-            local spiralOffset = (s - 1) * math.pi  -- 180度相位差
-            local segCount = math.floor(15 + progress * 20)
-            for i = 1, segCount do
-                local segT = (i / segCount)
-                local spiralAngle = segT * math.pi * 4 + t * 3.0 + spiralOffset
-                local spiralDist = bodyRadius * (0.5 + segT * 0.8)
-                local spiralX = screenX + math.cos(spiralAngle) * spiralDist
-                local spiralY = glowCenterY + 20 * sy - segT * 80 * sy
-                local segSize = (1.5 + (1.0 - segT) * 2.5) * sx * spiralAlpha
-                local segAlpha = math.floor((1.0 - segT * 0.6) * 200 * spiralAlpha)
-                if segAlpha > 10 then
-                    nvgBeginPath(nvg_)
-                    nvgCircle(nvg_, spiralX, spiralY, segSize)
-                    if s == 1 then
-                        nvgFillColor(nvg_, nvgRGBA(140, 210, 255, segAlpha))
-                    else
-                        nvgFillColor(nvg_, nvgRGBA(200, 240, 255, math.floor(segAlpha * 0.7)))
-                    end
-                    nvgFill(nvg_)
-                end
-            end
-        end
-    end
-
-    -- ====== 6) 能量收束线（从四周汇聚向法阵，带弧度） ======
-    if progress > 0.4 then
-        local lineAlpha = math.floor((progress - 0.4) / 0.6 * 200)
-        local lineCount = math.floor(8 + progress * 8)
-        for i = 1, lineCount do
-            local startAngle = (i / lineCount) * math.pi * 2 + t * 0.6 + i * 0.3
-            local startDist = bodyRadius * (2.5 + math.sin(t * 2 + i) * 0.5)
-            local lx1 = screenX + math.cos(startAngle) * startDist
-            local ly1 = glowCenterY + math.sin(startAngle) * startDist * 0.4
-            local lx2 = circleX + math.cos(t * 3 + i) * 5 * sx
-            local ly2 = circleY + math.sin(t * 3 + i) * 5 * sy
-            -- 中间控制点（弧线）
-            local mx = (lx1 + lx2) * 0.5 + math.sin(t * 4 + i * 1.5) * 15 * sx
-            local my = (ly1 + ly2) * 0.5 - 10 * sy
-            local lFade = 0.5 + math.sin(t * 5 + i * 2.2) * 0.5
-            nvgBeginPath(nvg_)
-            nvgMoveTo(nvg_, lx1, ly1)
-            nvgQuadTo(nvg_, mx, my, lx2, ly2)
-            nvgStrokeColor(nvg_, nvgRGBA(160, 230, 255, math.floor(lineAlpha * lFade)))
-            nvgStrokeWidth(nvg_, 1.0 + progress * 1.5)
-            nvgStroke(nvg_)
-            -- 线条末端亮点
-            nvgBeginPath(nvg_)
-            nvgCircle(nvg_, lx1, ly1, (1.5 + math.sin(t * 8 + i) * 0.5) * sx)
-            nvgFillColor(nvg_, nvgRGBA(220, 250, 255, math.floor(lineAlpha * lFade * 0.8)))
-            nvgFill(nvg_)
-        end
-    end
-
-    -- ====== 7) 闪电能量弧（角色与法阵之间的电弧） ======
-    if progress > 0.5 then
-        local arcAlpha = (progress - 0.5) / 0.5
-        local arcCount = math.floor(2 + progress * 3)
-        for a = 1, arcCount do
-            local arcPhase = t * 12 + a * 3.7
-            -- 只在特定相位闪烁
-            if math.sin(arcPhase) > 0.3 then
-                local segments = 5 + math.floor(progress * 3)
-                nvgBeginPath(nvg_)
-                local ax1 = screenX + dir * 15 * sx
-                local ay1 = glowCenterY
-                nvgMoveTo(nvg_, ax1, ay1)
-                for si = 1, segments do
-                    local segProg = si / segments
-                    local baseAX = ax1 + (circleX - ax1) * segProg
-                    local baseAY = ay1 + (circleY - ay1) * segProg
-                    local jitterX = (math.random() - 0.5) * 12 * sx * (1 - segProg)
-                    local jitterY = (math.random() - 0.5) * 10 * sy * (1 - segProg)
-                    nvgLineTo(nvg_, baseAX + jitterX, baseAY + jitterY)
-                end
-                nvgStrokeColor(nvg_, nvgRGBA(180, 240, 255, math.floor(200 * arcAlpha * (0.5 + math.sin(arcPhase) * 0.5))))
-                nvgStrokeWidth(nvg_, 1.0 + progress)
-                nvgStroke(nvg_)
-            end
-        end
-    end
-
-    -- ====== 8) 地面冰霜蔓延（从角色脚下向前方扩展冰冻地面） ======
-    if progress > 0.3 then
-        local frostExtent = (progress - 0.3) / 0.7
-        local frostLength = frostExtent * math.abs(circleOffX) * 1.2
-        local frostStartX = screenX + dir * bodyRadius * 0.3
-        local frostEndX = frostStartX + dir * frostLength
-        -- 冰霜地面半透明填充
-        nvgBeginPath(nvg_)
-        nvgMoveTo(nvg_, frostStartX, screenY)
-        nvgLineTo(nvg_, frostEndX, screenY)
-        nvgLineTo(nvg_, frostEndX, screenY + 4 * sy)
-        nvgLineTo(nvg_, frostStartX, screenY + 4 * sy)
-        nvgClosePath(nvg_)
-        local frostGrad = nvgLinearGradient(nvg_, frostStartX, screenY, frostEndX, screenY,
-            nvgRGBA(120, 200, 255, math.floor(100 * frostExtent)),
-            nvgRGBA(120, 200, 255, 0))
-        nvgFillPaint(nvg_, frostGrad)
-        nvgFill(nvg_)
-        -- 冰霜边缘闪烁微粒
-        local frostParticles = math.floor(3 + frostExtent * 8)
-        for fi = 1, frostParticles do
-            local fp = fi / frostParticles
-            local fpx = frostStartX + (frostEndX - frostStartX) * fp
-            local fpy = screenY + (math.random() - 0.5) * 6 * sy
-            local fpFlicker = math.sin(t * 10 + fi * 2.3)
-            if fpFlicker > 0.2 then
-                local fpSize = (1.0 + fpFlicker) * sx
-                nvgBeginPath(nvg_)
-                nvgCircle(nvg_, fpx, fpy, fpSize)
-                nvgFillColor(nvg_, nvgRGBA(200, 240, 255, math.floor(120 * frostExtent * fpFlicker)))
-                nvgFill(nvg_)
-            end
-        end
-    end
-
-    -- ====== 9) 上升冰雾（角色头顶飘散的寒气微粒，增强版） ======
-    local mistCount = math.floor(8 + progress * 15)
-    for i = 1, mistCount do
-        local phase = t * 1.5 + i * 1.1
-        local mx = screenX + math.sin(phase * 2.3) * bodyRadius * 0.8
-        local myBase = glowCenterY - 20 * sy
-        local my = myBase - (phase % 2.5) / 2.5 * 60 * sy
-        local mAlpha = (1.0 - (phase % 2.5) / 2.5) * (0.3 + progress * 0.7)
-        local mSize = (2 + math.sin(phase) * 1.5) * sx * (1 + progress * 0.6)
-        if mAlpha > 0.05 then
-            nvgBeginPath(nvg_)
-            nvgCircle(nvg_, mx, my, mSize)
-            nvgFillColor(nvg_, nvgRGBA(200, 240, 255, math.floor(90 * mAlpha)))
-            nvgFill(nvg_)
-        end
-    end
-
-    -- ====== 10) 脉冲波纹（周期性从角色中心向外扩散的圆环） ======
-    local pulseInterval = 0.6 - progress * 0.2  -- 蓄力越满频率越高
-    local pulseCount = 3
-    for pi = 1, pulseCount do
-        local pulsePhase = ((t + pi * pulseInterval) % (pulseInterval * pulseCount)) / (pulseInterval * pulseCount)
-        local pulseRadius = bodyRadius * (0.5 + pulsePhase * 2.5)
-        local pulseAlphaVal = (1.0 - pulsePhase) * progress
-        if pulseAlphaVal > 0.05 then
-            nvgBeginPath(nvg_)
-            nvgCircle(nvg_, screenX, glowCenterY, pulseRadius)
-            nvgStrokeColor(nvg_, nvgRGBA(150, 220, 255, math.floor(100 * pulseAlphaVal)))
-            nvgStrokeWidth(nvg_, (1.5 - pulsePhase) * 2)
-            nvgStroke(nvg_)
-        end
-    end
-
-    -- ====== 11) 蓄力进度条（角色头顶上方，不被精灵遮挡） ======
-    local barW = 50 * sx
-    local barH = 5 * sy
-    local barX = screenX - barW / 2
-    local barY = screenY - 145 * sy
-    -- 背景
-    nvgBeginPath(nvg_)
-    nvgRoundedRect(nvg_, barX, barY, barW, barH, 2)
-    nvgFillColor(nvg_, nvgRGBA(0, 0, 0, 150))
-    nvgFill(nvg_)
-    -- 填充
-    nvgBeginPath(nvg_)
-    nvgRoundedRect(nvg_, barX + 1, barY + 1, (barW - 2) * progress, barH - 2, 1)
-    local barGrad = nvgLinearGradient(nvg_, barX, barY, barX + barW * progress, barY,
-        nvgRGBA(100, 200, 255, 255), nvgRGBA(200, 240, 255, 255))
-    nvgFillPaint(nvg_, barGrad)
-    nvgFill(nvg_)
+    Renderer.DrawChargeEffect(width, height, camX, camY)
 end
 
--- ============================================================================
--- 绘制角色2蓄力特效（红色蝴蝶群 + 暗红光辉）
--- ============================================================================
 function DrawChargeEffectChar2(width, height, camX, camY)
-    if playerNode_ == nil then return end
-
-    local pos = playerNode_.position2D
-    local screenX, screenY = PhysicsToScreen(pos.x, pos.y, camX, camY)
-    local sx = width / SCREEN_WIDTH
-    local sy = height / SCREEN_HEIGHT
-    screenX = screenX * sx
-    screenY = screenY * sy
-
-    local progress = math.min(chargeTimer_ / CHARGE_MAX_DURATION, 1.0)
-    local dir = facingRight_ and 1 or -1
-    local t = chargeTimer_
-    local glowCenterY = screenY - 30 * sy
-    local bodyRadius = 38 * sx
-
-    -- ====== 1) 角色身体暗红光辉 ======
-    local glowRadius = 40 * sx * (0.8 + progress * 0.5)
-    local bodyGlowAlpha = math.floor(30 + progress * 80)
-    local glowGrad = nvgRadialGradient(nvg_, screenX, glowCenterY, glowRadius * 0.2, glowRadius,
-        nvgRGBA(200, 50, 80, bodyGlowAlpha), nvgRGBA(150, 20, 60, 0))
-    nvgBeginPath(nvg_)
-    nvgCircle(nvg_, screenX, glowCenterY, glowRadius)
-    nvgFillPaint(nvg_, glowGrad)
-    nvgFill(nvg_)
-
-    -- ====== 2) 脚底暗红能量圈 ======
-    local frostPulse = 1.0 + math.sin(t * 4) * 0.15
-    local frostR1 = bodyRadius * (1.0 + progress * 0.6) * frostPulse
-    nvgBeginPath(nvg_)
-    nvgEllipse(nvg_, screenX, screenY, frostR1, frostR1 * 0.22)
-    nvgStrokeColor(nvg_, nvgRGBA(200, 50, 80, math.floor((50 + progress * 120) * frostPulse)))
-    nvgStrokeWidth(nvg_, 1.5 + progress * 2)
-    nvgStroke(nvg_)
-
-    -- ====== 3) 蝴蝶群环绕角色 ======
-    local butterflyCount = math.floor(3 + progress * 5)
-    for i = 1, butterflyCount do
-        local angle = (i / butterflyCount) * math.pi * 2 + t * 1.2
-        local dist = bodyRadius * (0.8 + math.sin(t * 1.8 + i * 2.1) * 0.3)
-        local bx = screenX + math.cos(angle) * dist
-        local by = glowCenterY + math.sin(angle) * dist * 0.5
-        by = by + math.sin(t * 2.5 + i * 1.5) * 6 * sy
-
-        local bSize = (4 + progress * 4) * sx
-        local bAlpha = math.floor(160 + progress * 90)
-        -- 蝴蝶翅膀拍动
-        local wingFlap = math.sin(t * 8 + i * 2.5) * 0.4 + 0.6
-
-        nvgSave(nvg_)
-        nvgTranslate(nvg_, bx, by)
-        nvgRotate(nvg_, math.sin(t * 1.5 + i) * 0.3)
-
-        -- 左翅
-        nvgBeginPath(nvg_)
-        nvgEllipse(nvg_, -bSize * 0.5 * wingFlap, 0, bSize * 0.7 * wingFlap, bSize * 0.45)
-        nvgFillColor(nvg_, nvgRGBA(220, 40, 80, bAlpha))
-        nvgFill(nvg_)
-        -- 右翅
-        nvgBeginPath(nvg_)
-        nvgEllipse(nvg_, bSize * 0.5 * wingFlap, 0, bSize * 0.7 * wingFlap, bSize * 0.45)
-        nvgFillColor(nvg_, nvgRGBA(220, 40, 80, bAlpha))
-        nvgFill(nvg_)
-        -- 身体
-        nvgBeginPath(nvg_)
-        nvgEllipse(nvg_, 0, 0, bSize * 0.12, bSize * 0.35)
-        nvgFillColor(nvg_, nvgRGBA(60, 0, 20, bAlpha))
-        nvgFill(nvg_)
-        -- 翅膀高光
-        nvgBeginPath(nvg_)
-        nvgEllipse(nvg_, -bSize * 0.35 * wingFlap, -bSize * 0.1, bSize * 0.2 * wingFlap, bSize * 0.15)
-        nvgFillColor(nvg_, nvgRGBA(255, 120, 160, math.floor(bAlpha * 0.5)))
-        nvgFill(nvg_)
-        nvgBeginPath(nvg_)
-        nvgEllipse(nvg_, bSize * 0.35 * wingFlap, -bSize * 0.1, bSize * 0.2 * wingFlap, bSize * 0.15)
-        nvgFillColor(nvg_, nvgRGBA(255, 120, 160, math.floor(bAlpha * 0.5)))
-        nvgFill(nvg_)
-
-        nvgRestore(nvg_)
-    end
-
-    -- ====== 4) 小蝴蝶微粒散布（外层快速飞舞） ======
-    local dustCount = math.floor(6 + progress * 12)
-    for i = 1, dustCount do
-        local angle = (i / dustCount) * math.pi * 2 + t * 2.5 + i * 0.15
-        local dist2 = bodyRadius * (1.2 + progress * 0.6 + math.sin(t * 3 + i * 0.9) * 0.3)
-        local px = screenX + math.cos(angle) * dist2
-        local py = glowCenterY + math.sin(angle) * dist2 * 0.45
-        py = py + math.sin(t * 4 + i * 1.8) * 4 * sy
-        local pSize = (1.5 + math.sin(t * 6 + i * 2.1) * 0.7) * sx * (1 + progress)
-        local pAlpha = math.floor((80 + progress * 140) * (0.4 + math.sin(t * 7 + i * 3) * 0.6))
-        if pAlpha > 0 then
-            nvgBeginPath(nvg_)
-            nvgCircle(nvg_, px, py, pSize)
-            nvgFillColor(nvg_, nvgRGBA(255, 80, 120, pAlpha))
-            nvgFill(nvg_)
-        end
-    end
-
-    -- ====== 5) 螺旋上升蝴蝶轨迹 ======
-    if progress > 0.2 then
-        local spiralAlpha = (progress - 0.2) / 0.8
-        local segCount = math.floor(12 + progress * 16)
-        for i = 1, segCount do
-            local segT = (i / segCount)
-            local spiralAngle = segT * math.pi * 3 + t * 2.5
-            local spiralDist = bodyRadius * (0.4 + segT * 0.7)
-            local spiralX = screenX + math.cos(spiralAngle) * spiralDist
-            local spiralY = glowCenterY + 15 * sy - segT * 70 * sy
-            local segSize = (1.5 + (1.0 - segT) * 2) * sx * spiralAlpha
-            local segAlpha = math.floor((1.0 - segT * 0.7) * 180 * spiralAlpha)
-            if segAlpha > 10 then
-                nvgBeginPath(nvg_)
-                nvgCircle(nvg_, spiralX, spiralY, segSize)
-                nvgFillColor(nvg_, nvgRGBA(255, 60, 100, segAlpha))
-                nvgFill(nvg_)
-            end
-        end
-    end
-
-    -- ====== 6) 脉冲波纹（暗红色） ======
-    local pulseInterval = 0.7 - progress * 0.2
-    for pi = 1, 3 do
-        local pulsePhase = ((t + pi * pulseInterval) % (pulseInterval * 3)) / (pulseInterval * 3)
-        local pulseRadius = bodyRadius * (0.5 + pulsePhase * 2.0)
-        local pulseAlphaVal = (1.0 - pulsePhase) * progress
-        if pulseAlphaVal > 0.05 then
-            nvgBeginPath(nvg_)
-            nvgCircle(nvg_, screenX, glowCenterY, pulseRadius)
-            nvgStrokeColor(nvg_, nvgRGBA(200, 50, 80, math.floor(80 * pulseAlphaVal)))
-            nvgStrokeWidth(nvg_, (1.5 - pulsePhase) * 2)
-            nvgStroke(nvg_)
-        end
-    end
-
-    -- ====== 7) 蓄力进度条（角色头顶上方，不被精灵遮挡，红色系） ======
-    local barW = 50 * sx
-    local barH = 5 * sy
-    local barX = screenX - barW / 2
-    local barY = screenY - 145 * sy
-    nvgBeginPath(nvg_)
-    nvgRoundedRect(nvg_, barX, barY, barW, barH, 2)
-    nvgFillColor(nvg_, nvgRGBA(0, 0, 0, 150))
-    nvgFill(nvg_)
-    nvgBeginPath(nvg_)
-    nvgRoundedRect(nvg_, barX + 1, barY + 1, (barW - 2) * progress, barH - 2, 1)
-    local barGrad = nvgLinearGradient(nvg_, barX, barY, barX + barW * progress, barY,
-        nvgRGBA(200, 40, 80, 255), nvgRGBA(255, 100, 140, 255))
-    nvgFillPaint(nvg_, barGrad)
-    nvgFill(nvg_)
+    Renderer.DrawChargeEffectChar2(width, height, camX, camY)
 end
 
--- ============================================================================
--- 绘制治愈特效（绿色光环 + 粒子）
--- ============================================================================
 function DrawHealEffect(width, height, camX, camY)
-    if playerNode_ == nil then return end
-
-    local pos = playerNode_.position2D
-    local screenX, screenY = PhysicsToScreen(pos.x, pos.y, camX, camY)
-    local sx = width / SCREEN_WIDTH
-    local sy = height / SCREEN_HEIGHT
-    screenX = screenX * sx
-    screenY = screenY * sy
-
-    local progress = math.min(healTimer_ / HEAL_DURATION, 1.0)
-    local t = healTimer_
-    local bodyRadius = 40 * sx
-
-    -- 光环出现/消失阶段
-    local fadeIn = math.min(progress / 0.2, 1.0)   -- 前20%淡入
-    local fadeOut = math.min((1.0 - progress) / 0.2, 1.0) -- 后20%淡出
-    local alpha = fadeIn * fadeOut
-
-    -- 角色2使用红色/紫色治愈特效，角色1保持绿色
-    local isChar2 = (currentCharacter_ == 2)
-    -- 颜色方案：角色1=绿色系，角色2=红紫色系
-    local glowR, glowG, glowB = 100, 255, 150
-    local glowR2, glowG2, glowB2 = 50, 200, 100
-    local ringR, ringG, ringB = 80, 255, 140
-    local circleR, circleG, circleB = 80, 230, 130
-    local starR, starG, starB = 120, 255, 170
-    local particleR, particleG, particleB = 100, 255, 160
-    local runeR, runeG, runeB = 80, 240, 140
-    local runeHiR, runeHiG, runeHiB = 200, 255, 220
-    local spiralR, spiralG, spiralB = 120, 255, 180
-    local pillarR, pillarG, pillarB = 80, 255, 140
-    local flashR, flashG, flashB = 200, 255, 220
-
-    if isChar2 then
-        glowR, glowG, glowB = 200, 60, 100
-        glowR2, glowG2, glowB2 = 150, 30, 80
-        ringR, ringG, ringB = 220, 60, 120
-        circleR, circleG, circleB = 180, 50, 140
-        starR, starG, starB = 200, 80, 180
-        particleR, particleG, particleB = 220, 70, 140
-        runeR, runeG, runeB = 180, 50, 160
-        runeHiR, runeHiG, runeHiB = 255, 180, 220
-        spiralR, spiralG, spiralB = 200, 60, 180
-        pillarR, pillarG, pillarB = 200, 50, 120
-        flashR, flashG, flashB = 255, 180, 220
-    end
-
-    -- ====== 1) 全身柔光 ======
-    local glowCenterY = screenY - 30 * sy
-    local glowRadius = bodyRadius * (1.2 + progress * 0.3)
-    local glowGrad = nvgRadialGradient(nvg_, screenX, glowCenterY, glowRadius * 0.1, glowRadius,
-        nvgRGBA(glowR, glowG, glowB, math.floor(60 * alpha)), nvgRGBA(glowR2, glowG2, glowB2, 0))
-    nvgBeginPath(nvg_)
-    nvgCircle(nvg_, screenX, glowCenterY, glowRadius)
-    nvgFillPaint(nvg_, glowGrad)
-    nvgFill(nvg_)
-
-    -- ====== 2) 主光环（快速扩散的圆环） ======
-    local ringCount = 3
-    for ri = 1, ringCount do
-        local ringPhase = (progress * 3 + ri * 0.3) % 1.0
-        local ringRadius = bodyRadius * (0.4 + ringPhase * 1.8)
-        local ringAlpha = (1.0 - ringPhase) * alpha
-        if ringAlpha > 0.02 then
-            nvgBeginPath(nvg_)
-            nvgCircle(nvg_, screenX, glowCenterY, ringRadius)
-            nvgStrokeColor(nvg_, nvgRGBA(ringR, ringG, ringB, math.floor(180 * ringAlpha)))
-            nvgStrokeWidth(nvg_, (2.5 - ringPhase * 1.5) * sx)
-            nvgStroke(nvg_)
-        end
-    end
-
-    -- ====== 3) 底部魔法阵（六芒星旋转） ======
-    local circleRadius = bodyRadius * (0.6 + progress * 0.4)
-    local rotation = t * 3.5
-    nvgSave(nvg_)
-    nvgTranslate(nvg_, screenX, screenY)
-    nvgRotate(nvg_, rotation)
-    -- 外圈
-    nvgBeginPath(nvg_)
-    nvgCircle(nvg_, 0, 0, circleRadius)
-    nvgStrokeColor(nvg_, nvgRGBA(circleR, circleG, circleB, math.floor(160 * alpha)))
-    nvgStrokeWidth(nvg_, 2 * sx)
-    nvgStroke(nvg_)
-    -- 六芒星
-    for i = 0, 5 do
-        local a1 = (i / 6) * math.pi * 2
-        local a2 = ((i + 2) / 6) * math.pi * 2
-        nvgBeginPath(nvg_)
-        nvgMoveTo(nvg_, math.cos(a1) * circleRadius * 0.85, math.sin(a1) * circleRadius * 0.85)
-        nvgLineTo(nvg_, math.cos(a2) * circleRadius * 0.85, math.sin(a2) * circleRadius * 0.85)
-        nvgStrokeColor(nvg_, nvgRGBA(starR, starG, starB, math.floor(140 * alpha)))
-        nvgStrokeWidth(nvg_, 1.5 * sx)
-        nvgStroke(nvg_)
-    end
-    nvgRestore(nvg_)
-
-    -- ====== 4) 上升光粒子（密集环绕上升） ======
-    local particleCount = math.floor(15 + progress * 20)
-    for i = 1, particleCount do
-        local phase = t * 2.0 + i * 0.8
-        local angle = (i / particleCount) * math.pi * 2 + t * 1.5
-        local dist = bodyRadius * (0.3 + math.sin(phase * 0.7) * 0.4)
-        local px = screenX + math.cos(angle) * dist
-        local riseHeight = ((phase * 0.8) % 1.5) / 1.5
-        local py = screenY - riseHeight * 80 * sy
-        local pAlpha = (1.0 - riseHeight) * alpha
-        local pSize = (1.5 + math.sin(phase * 3) * 0.8) * sx
-
-        if pAlpha > 0.05 then
-            nvgBeginPath(nvg_)
-            nvgCircle(nvg_, px, py, pSize)
-            if i % 5 == 0 then
-                nvgFillColor(nvg_, nvgRGBA(255, 255, 220, math.floor(200 * pAlpha)))
-            else
-                nvgFillColor(nvg_, nvgRGBA(particleR, particleG, particleB, math.floor(180 * pAlpha)))
-            end
-            nvgFill(nvg_)
-        end
-    end
-
-    -- ====== 5) 叶片/符文环绕（菱形符文） ======
-    local runeCount = math.floor(4 + progress * 4)
-    for i = 1, runeCount do
-        local runeAngle = (i / runeCount) * math.pi * 2 + t * 2.2
-        local runeDist = bodyRadius * (0.8 + math.sin(t * 1.8 + i * 1.5) * 0.2)
-        local rx = screenX + math.cos(runeAngle) * runeDist
-        local ry = glowCenterY + math.sin(runeAngle) * runeDist * 0.45
-        ry = ry + math.sin(t * 3 + i * 2) * 6 * sy
-        local rSize = (4 + math.sin(t * 2.5 + i) * 1.5) * sx * alpha
-
-        nvgSave(nvg_)
-        nvgTranslate(nvg_, rx, ry)
-        nvgRotate(nvg_, t * 3 + i * 1.3)
-        -- 菱形叶片
-        nvgBeginPath(nvg_)
-        nvgMoveTo(nvg_, 0, -rSize * 1.5)
-        nvgLineTo(nvg_, rSize * 0.5, 0)
-        nvgLineTo(nvg_, 0, rSize * 1.5)
-        nvgLineTo(nvg_, -rSize * 0.5, 0)
-        nvgClosePath(nvg_)
-        nvgFillColor(nvg_, nvgRGBA(runeR, runeG, runeB, math.floor(160 * alpha)))
-        nvgFill(nvg_)
-        -- 中线高光
-        nvgBeginPath(nvg_)
-        nvgMoveTo(nvg_, 0, -rSize * 1.2)
-        nvgLineTo(nvg_, 0, rSize * 1.2)
-        nvgStrokeColor(nvg_, nvgRGBA(runeHiR, runeHiG, runeHiB, math.floor(180 * alpha)))
-        nvgStrokeWidth(nvg_, 0.8 * sx)
-        nvgStroke(nvg_)
-        nvgRestore(nvg_)
-    end
-
-    -- ====== 6) 螺旋光带（双螺旋上升） ======
-    local spiralSegs = math.floor(12 + progress * 10)
-    for s = 1, 2 do
-        local spiralOff = (s - 1) * math.pi
-        for i = 1, spiralSegs do
-            local segT = i / spiralSegs
-            local sAngle = segT * math.pi * 3 + t * 2.5 + spiralOff
-            local sDist = bodyRadius * (0.4 + segT * 0.3)
-            local spx = screenX + math.cos(sAngle) * sDist
-            local spy = screenY - segT * 70 * sy
-            local sSize = (2.0 + (1.0 - segT) * 2.0) * sx * alpha
-            local sAlpha = (1.0 - segT * 0.5) * alpha
-            if sAlpha > 0.05 then
-                nvgBeginPath(nvg_)
-                nvgCircle(nvg_, spx, spy, sSize)
-                nvgFillColor(nvg_, nvgRGBA(spiralR, spiralG, spiralB, math.floor(140 * sAlpha)))
-                nvgFill(nvg_)
-            end
-        end
-    end
-
-    -- ====== 7) 脚底治愈光柱（从底部向上的光柱效果） ======
-    if progress > 0.15 then
-        local pillarAlpha = alpha * math.min((progress - 0.15) / 0.2, 1.0)
-        local pillarH = 90 * sy * pillarAlpha
-        local pillarW = 18 * sx
-        local pillarGrad = nvgLinearGradient(nvg_, screenX, screenY, screenX, screenY - pillarH,
-            nvgRGBA(pillarR, pillarG, pillarB, math.floor(80 * pillarAlpha)),
-            nvgRGBA(pillarR, pillarG, pillarB, 0))
-        nvgBeginPath(nvg_)
-        nvgMoveTo(nvg_, screenX - pillarW, screenY)
-        nvgLineTo(nvg_, screenX + pillarW, screenY)
-        nvgLineTo(nvg_, screenX + pillarW * 0.3, screenY - pillarH)
-        nvgLineTo(nvg_, screenX - pillarW * 0.3, screenY - pillarH)
-        nvgClosePath(nvg_)
-        nvgFillPaint(nvg_, pillarGrad)
-        nvgFill(nvg_)
-    end
-
-    -- ====== 8) 十字闪光（高潮时刻的十字星光） ======
-    if progress > 0.3 and progress < 0.8 then
-        local flashAlpha = math.sin((progress - 0.3) / 0.5 * math.pi) * alpha
-        local flashSize = 30 * sx * flashAlpha
-        -- 水平线
-        nvgBeginPath(nvg_)
-        nvgMoveTo(nvg_, screenX - flashSize, glowCenterY)
-        nvgLineTo(nvg_, screenX + flashSize, glowCenterY)
-        nvgStrokeColor(nvg_, nvgRGBA(flashR, flashG, flashB, math.floor(200 * flashAlpha)))
-        nvgStrokeWidth(nvg_, 2 * sx)
-        nvgStroke(nvg_)
-        -- 垂直线
-        nvgBeginPath(nvg_)
-        nvgMoveTo(nvg_, screenX, glowCenterY - flashSize)
-        nvgLineTo(nvg_, screenX, glowCenterY + flashSize)
-        nvgStrokeColor(nvg_, nvgRGBA(flashR, flashG, flashB, math.floor(200 * flashAlpha)))
-        nvgStrokeWidth(nvg_, 2 * sx)
-        nvgStroke(nvg_)
-        -- 中心亮点
-        nvgBeginPath(nvg_)
-        nvgCircle(nvg_, screenX, glowCenterY, 4 * sx * flashAlpha)
-        nvgFillColor(nvg_, nvgRGBA(255, 255, 255, math.floor(240 * flashAlpha)))
-        nvgFill(nvg_)
-    end
+    Renderer.DrawHealEffect(width, height, camX, camY)
 end
 
--- ============================================================================
--- 绘制地面矿脉状冰晶群（华丽爆发特效）
--- ============================================================================
 function DrawIceCrystals(width, height, camX, camY)
-    local sx = width / SCREEN_WIDTH
-    local sy = height / SCREEN_HEIGHT
-    local ppu = PIXELS_PER_UNIT
-
-    for _, group in ipairs(iceCrystals_) do
-        local t = group.spawnTime
-        local fadeOut = math.min(group.life / 0.5, 1.0)  -- 最后0.5秒淡出
-
-        -- 地面裂缝光芒（先于冰晶出现）
-        local crackAlpha = math.min(t / 0.15, 1.0) * fadeOut
-        if crackAlpha > 0 then
-            local groundScreenX, groundScreenY = PhysicsToScreen(
-                group.crystals[math.ceil(#group.crystals / 2)].x,
-                group.groundY, camX, camY)
-            groundScreenX = groundScreenX * sx
-            groundScreenY = groundScreenY * sy
-
-            -- 地面裂缝发光线
-            local crackLen = (#group.crystals * 0.6) * ppu * sx
-            nvgBeginPath(nvg_)
-            nvgMoveTo(nvg_, groundScreenX - crackLen * 0.5, groundScreenY)
-            nvgLineTo(nvg_, groundScreenX + crackLen * 0.5, groundScreenY)
-            nvgStrokeColor(nvg_, nvgRGBA(150, 220, 255, math.floor(180 * crackAlpha * fadeOut)))
-            nvgStrokeWidth(nvg_, 2 + group.power * 2)
-            nvgStroke(nvg_)
-
-            -- 裂缝扩散光晕
-            nvgBeginPath(nvg_)
-            nvgEllipse(nvg_, groundScreenX, groundScreenY, crackLen * 0.55, 8 * sy)
-            nvgFillColor(nvg_, nvgRGBA(100, 200, 255, math.floor(60 * crackAlpha * fadeOut)))
-            nvgFill(nvg_)
-        end
-
-        -- 逐个绘制冰晶柱
-        for idx, c in ipairs(group.crystals) do
-            local elapsed = t - c.delay
-            if elapsed > 0 then
-                -- 冰晶破土动画：快速升起
-                local riseT = math.min(elapsed / 0.3, 1.0)
-                -- 弹性缓动
-                local eased = riseT < 1.0 and (1.0 - math.cos(riseT * math.pi * 0.5)) or 1.0
-                if riseT >= 0.8 then
-                    -- 轻微回弹
-                    local bounceT = (riseT - 0.8) / 0.2
-                    eased = 1.0 + math.sin(bounceT * math.pi) * 0.05
-                end
-
-                local currentH = c.height * eased * fadeOut
-                local currentW = c.width * (0.8 + riseT * 0.2)
-
-                local baseScreenX, baseScreenY = PhysicsToScreen(c.x, group.groundY, camX, camY)
-                baseScreenX = baseScreenX * sx
-                baseScreenY = baseScreenY * sy
-
-                local crystalH = currentH * ppu * sy
-                local crystalW = currentW * ppu * sx
-
-                nvgSave(nvg_)
-                nvgTranslate(nvg_, baseScreenX, baseScreenY)
-                nvgRotate(nvg_, c.angle)
-
-                -- 冰晶柱体（多边形，尖顶宽底）
-                local topW = crystalW * 0.15
-                local midW = crystalW * 0.7
-                local botW = crystalW * 1.0
-
-                -- 外层发光
-                local glowAlpha = math.floor(50 * fadeOut * group.power)
-                nvgBeginPath(nvg_)
-                nvgMoveTo(nvg_, 0, -crystalH)
-                nvgLineTo(nvg_, midW * 0.8, -crystalH * 0.4)
-                nvgLineTo(nvg_, botW * 0.7, 0)
-                nvgLineTo(nvg_, -botW * 0.7, 0)
-                nvgLineTo(nvg_, -midW * 0.8, -crystalH * 0.4)
-                nvgClosePath(nvg_)
-                nvgFillColor(nvg_, nvgRGBA(100, 180, 255, glowAlpha))
-                nvgFill(nvg_)
-
-                -- 主体冰晶（渐变：底部深蓝 → 顶部亮白）
-                nvgBeginPath(nvg_)
-                nvgMoveTo(nvg_, 0, -crystalH)
-                nvgLineTo(nvg_, topW, -crystalH * 0.85)
-                nvgLineTo(nvg_, midW * 0.6, -crystalH * 0.45)
-                nvgLineTo(nvg_, botW * 0.5, 0)
-                nvgLineTo(nvg_, -botW * 0.5, 0)
-                nvgLineTo(nvg_, -midW * 0.6, -crystalH * 0.45)
-                nvgLineTo(nvg_, -topW, -crystalH * 0.85)
-                nvgClosePath(nvg_)
-                local crystGrad = nvgLinearGradient(nvg_, 0, 0, 0, -crystalH,
-                    nvgRGBA(40, 100, 180, math.floor(220 * fadeOut)),
-                    nvgRGBA(200, 240, 255, math.floor(250 * fadeOut)))
-                nvgFillPaint(nvg_, crystGrad)
-                nvgFill(nvg_)
-
-                -- 内部高光面（半透明白色，模拟折射）
-                nvgBeginPath(nvg_)
-                nvgMoveTo(nvg_, -topW * 0.3, -crystalH * 0.9)
-                nvgLineTo(nvg_, midW * 0.2, -crystalH * 0.5)
-                nvgLineTo(nvg_, botW * 0.15, -crystalH * 0.1)
-                nvgLineTo(nvg_, -midW * 0.1, -crystalH * 0.4)
-                nvgClosePath(nvg_)
-                nvgFillColor(nvg_, nvgRGBA(255, 255, 255, math.floor(80 * fadeOut)))
-                nvgFill(nvg_)
-
-                -- 冰晶边缘轮廓
-                nvgBeginPath(nvg_)
-                nvgMoveTo(nvg_, 0, -crystalH)
-                nvgLineTo(nvg_, midW * 0.6, -crystalH * 0.45)
-                nvgLineTo(nvg_, botW * 0.5, 0)
-                nvgMoveTo(nvg_, 0, -crystalH)
-                nvgLineTo(nvg_, -midW * 0.6, -crystalH * 0.45)
-                nvgLineTo(nvg_, -botW * 0.5, 0)
-                nvgStrokeColor(nvg_, nvgRGBA(180, 230, 255, math.floor(150 * fadeOut)))
-                nvgStrokeWidth(nvg_, 1.0)
-                nvgStroke(nvg_)
-
-                nvgRestore(nvg_)
-
-                -- 破土粒子（出现瞬间）
-                if elapsed < 0.5 then
-                    local particleAlpha = (1.0 - elapsed / 0.5) * fadeOut
-                    local particleCount = 3 + math.floor(group.power * 3)
-                    for pi = 1, particleCount do
-                        local pAngle = (pi / particleCount) * math.pi + math.random() * 0.5
-                        local pDist = elapsed * ppu * sx * (2 + math.random() * 2)
-                        local px = baseScreenX + math.cos(pAngle) * pDist
-                        local py = baseScreenY - math.sin(pAngle) * pDist * 0.6
-                        local pSize = (1.5 + math.random() * 2) * sx
-                        nvgBeginPath(nvg_)
-                        -- 小碎冰菱形
-                        nvgMoveTo(nvg_, px - pSize, py)
-                        nvgLineTo(nvg_, px, py - pSize * 0.7)
-                        nvgLineTo(nvg_, px + pSize, py)
-                        nvgLineTo(nvg_, px, py + pSize * 0.7)
-                        nvgClosePath(nvg_)
-                        nvgFillColor(nvg_, nvgRGBA(180, 235, 255, math.floor(180 * particleAlpha)))
-                        nvgFill(nvg_)
-                    end
-                end
-
-                -- 顶部寒气散发（持续的微粒上升）
-                if riseT >= 1.0 and fadeOut > 0.3 then
-                    local mistCount = 2 + math.floor(group.power * 2)
-                    for mi = 1, mistCount do
-                        local mPhase = t * 2 + mi * 1.7 + idx * 0.5
-                        local mY = baseScreenY - crystalH - (mPhase % 1.0) * 20 * sy
-                        local mX = baseScreenX + math.sin(mPhase * 3) * crystalW * 0.8
-                        local mAlpha = (1.0 - (mPhase % 1.0)) * fadeOut * 0.6
-                        local mSize = (1 + math.sin(mPhase) * 0.5) * sx * 2
-                        nvgBeginPath(nvg_)
-                        nvgCircle(nvg_, mX, mY, mSize)
-                        nvgFillColor(nvg_, nvgRGBA(200, 240, 255, math.floor(100 * mAlpha)))
-                        nvgFill(nvg_)
-                    end
-                end
-            end
-        end
-
-        -- 地面冰霜扩散环（整体效果）
-        if t < 0.8 then
-            local ringProgress = t / 0.8
-            local centerX = group.crystals[math.ceil(#group.crystals / 2)].x
-            local ringScreenX, ringScreenY = PhysicsToScreen(centerX, group.groundY, camX, camY)
-            ringScreenX = ringScreenX * sx
-            ringScreenY = ringScreenY * sy
-            local ringRadius = ringProgress * (#group.crystals * 0.5) * ppu * sx
-            local ringAlpha = (1.0 - ringProgress) * fadeOut
-
-            nvgBeginPath(nvg_)
-            nvgEllipse(nvg_, ringScreenX, ringScreenY, ringRadius, ringRadius * 0.25)
-            nvgStrokeColor(nvg_, nvgRGBA(150, 220, 255, math.floor(150 * ringAlpha)))
-            nvgStrokeWidth(nvg_, 2 + group.power * 2)
-            nvgStroke(nvg_)
-        end
-    end
+    Renderer.DrawIceCrystals(width, height, camX, camY)
 end
 
--- ============================================================================
--- 绘制玩家（序列帧动画）
--- ============================================================================
 function DrawPlayer(width, height, camX, camY)
-    if playerNode_ == nil then
-        print("[DEBUG] DrawPlayer: playerNode_ is nil!")
-        return
-    end
-
-    local pos = playerNode_.position2D
-    local screenX, screenY = PhysicsToScreen(pos.x, pos.y, camX, camY)
-
-    -- 缩放到实际屏幕尺寸
-    local sx = width / SCREEN_WIDTH
-    local sy = height / SCREEN_HEIGHT
-    screenX = screenX * sx
-    screenY = screenY * sy
-
-    -- 玩家渲染尺寸（支持每动画独立缩放）
-    local animCropConfig_ = GetCurrentAnimCropConfig()
-    local animScale = (animCropConfig_[currentAnim_] and animCropConfig_[currentAnim_].scale) or 5.5
-    local playerDrawSize = PLAYER_RADIUS * animScale * PIXELS_PER_UNIT * sx
-
-    -- 选择当前序列帧图片（根据角色）
-    local img = imgIdle_
-    if currentCharacter_ == 2 then
-        -- 角色2: 黑红角娘
-        img = img2Idle_
-        if currentAnim_ == ANIM_RUN then
-            img = img2Run_
-        elseif currentAnim_ == ANIM_JUMP then
-            img = img2Jump_
-        elseif currentAnim_ == ANIM_ATTACK then
-            img = img2Attack_
-        elseif currentAnim_ == ANIM_BLOCK then
-            img = img2Block_
-        elseif currentAnim_ == ANIM_CHARGE then
-            img = img2Burst_   -- 角色2 Q技能: 蝴蝶瞬移爆发
-        elseif currentAnim_ == ANIM_HEAL then
-            img = img2Heal_
-        elseif currentAnim_ == ANIM_CROUCH then
-            img = img2Crouch_
-        elseif currentAnim_ == ANIM_CROUCH_WALK then
-            img = img2CrouchWalk_
-        elseif currentAnim_ == ANIM_HIT then
-            img = img2Hit_
-        end
-    else
-        -- 角色1: 冰法师
-        if currentAnim_ == ANIM_RUN then
-            img = imgRun_
-        elseif currentAnim_ == ANIM_JUMP then
-            img = imgJump_
-        elseif currentAnim_ == ANIM_ATTACK then
-            img = imgAttack_
-        elseif currentAnim_ == ANIM_BLOCK then
-            img = imgBlock_
-        elseif currentAnim_ == ANIM_CHARGE then
-            img = imgCharge_
-        elseif currentAnim_ == ANIM_HEAL then
-            img = imgHeal_
-        elseif currentAnim_ == ANIM_CROUCH then
-            img = imgCrouch_
-        elseif currentAnim_ == ANIM_CROUCH_WALK then
-            img = imgCrouch_  -- 角色1蹲走复用蹲下序列帧
-        elseif currentAnim_ == ANIM_HIT then
-            img = imgHit_
-        end
-    end
-
-    local frame = animFrame_
-
-    -- 蹲下动画使用帧映射表：animFrame_是索引(1-based)，转为实际帧号(0-based)
-    if currentAnim_ == ANIM_CROUCH then
-        local map = (currentCharacter_ == 2) and crouchFrameMap2_ or crouchFrameMap_
-        local idx = math.max(1, math.min(animFrame_, #map))
-        frame = map[idx]
-    end
-
-    -- 角色1蹲走：交替使用蹲下序列帧的第7帧和第3帧（0-based: 6和2）
-    if currentAnim_ == ANIM_CROUCH_WALK and currentCharacter_ == 1 then
-        local crouchWalkFrames = { 6, 2 }  -- 0-based帧号
-        frame = crouchWalkFrames[(animFrame_ % 2) + 1]
-    end
-
-    -- 光翼特效（滞空时显示 / 破碎动画）
-    DrawWingsEffect(screenX, screenY, playerDrawSize)
-
-    -- 如果图片加载成功，使用序列帧
-    if img ~= nil and img > 0 and imgWidth_ > 0 then
-        DrawSpriteFrame(img, frame, screenX, screenY, playerDrawSize, not facingRight_)
-    else
-        -- fallback: 绘制占位圆形（确保始终可见）
-        nvgBeginPath(nvg_)
-        nvgCircle(nvg_, screenX, screenY, playerDrawSize / 2)
-        nvgFillColor(nvg_, nvgRGBA(100, 180, 255, 255))
-        nvgFill(nvg_)
-
-        -- 绘制方向指示
-        nvgBeginPath(nvg_)
-        local dirX = facingRight_ and (playerDrawSize * 0.4) or (-playerDrawSize * 0.4)
-        nvgCircle(nvg_, screenX + dirX, screenY, playerDrawSize * 0.15)
-        nvgFillColor(nvg_, nvgRGBA(255, 255, 255, 255))
-        nvgFill(nvg_)
-    end
+    Renderer.DrawPlayer(width, height, camX, camY)
 end
 
--- ============================================================================
--- 光翼特效绘制（滞空时显示，结束时破碎消散）
--- 简单黄色菱形几何图形，只在角色背后一侧，跟随朝向
--- ============================================================================
 function DrawWingsEffect(cx, cy, playerSize)
-    local showWings = isHanging_
-    local showShatter = wingShatterTimer_ > 0
-
-    if not showWings and not showShatter then return end
-
-    nvgSave(nvg_)
-    nvgGlobalAlpha(nvg_, 0.85)  -- 85%不透明度
-
-    -- 朝向决定光翼方向：面朝右时光翼在左侧（背后），反之亦然
-    local dirSign = facingRight_ and -1 or 1
-
-    -- 光翼基准位置：角色背部肩膀处，偏向背后
-    local baseX = cx + dirSign * playerSize * 0.15
-    local baseY = cy - playerSize * 0.25
-
-    -- 3片菱形羽翼的配置：{角度偏移, 长度比例, 宽度比例, 距离中心偏移}
-    local feathers = {
-        { angle = -30, lenScale = 0.85, widScale = 0.8, dist = 0.2 },  -- 上翼
-        { angle =   5, lenScale = 1.0,  widScale = 0.85, dist = 0.25 }, -- 中翼
-        { angle =  40, lenScale = 0.7,  widScale = 0.7, dist = 0.2 },  -- 下翼
-    }
-
-    local baseLen = playerSize * 0.4   -- 菱形基础长度
-    local baseWid = playerSize * 0.08  -- 菱形基础宽度
-
-    -- 角色配色：角色1黄色，角色2黑→深红渐变
-    local isChar2 = (currentCharacter_ == 2)
-
-    if showWings then
-        -- 滞空中：轻微脉动 + 微浮动
-        local pulse = 1.0 + math.sin(os.clock() * 6.0) * 0.06
-        local floatY = math.sin(os.clock() * 3.0) * 1.0
-        baseY = baseY + floatY
-
-        for _, f in ipairs(feathers) do
-            local len = baseLen * f.lenScale * pulse
-            local wid = baseWid * f.widScale * pulse
-            local rad = math.rad(f.angle)
-            -- 菱形中心点（向背后方向展开）
-            local fcx = baseX + dirSign * math.cos(rad) * playerSize * f.dist
-            local fcy = baseY + math.sin(rad) * playerSize * f.dist
-
-            -- 菱形方向沿角度展开，水平分量跟随朝向翻转
-            local cosA = math.cos(rad) * dirSign
-            local sinA = math.sin(rad)
-            local tipX = fcx + cosA * len * 0.6
-            local tipY = fcy + sinA * len * 0.6
-            local tailX = fcx - cosA * len * 0.4
-            local tailY = fcy - sinA * len * 0.4
-            local sideX1 = fcx + (-sinA) * wid
-            local sideY1 = fcy + cosA * wid * dirSign
-            local sideX2 = fcx - (-sinA) * wid
-            local sideY2 = fcy - cosA * wid * dirSign
-
-            nvgBeginPath(nvg_)
-            nvgMoveTo(nvg_, tipX, tipY)
-            nvgLineTo(nvg_, sideX1, sideY1)
-            nvgLineTo(nvg_, tailX, tailY)
-            nvgLineTo(nvg_, sideX2, sideY2)
-            nvgClosePath(nvg_)
-            if isChar2 then
-                -- 角色2：深紫黑→亮红渐变
-                local grad = nvgLinearGradient(nvg_, tailX, tailY, tipX, tipY,
-                    nvgRGBA(40, 5, 15, 255), nvgRGBA(220, 40, 40, 255))
-                nvgFillPaint(nvg_, grad)
-            else
-                -- 角色1：从内到外 橘色→黄色渐变
-                local grad = nvgLinearGradient(nvg_, tailX, tailY, tipX, tipY,
-                    nvgRGBA(255, 140, 20, 255), nvgRGBA(255, 230, 50, 255))
-                nvgFillPaint(nvg_, grad)
-            end
-            nvgFill(nvg_)
-        end
-    else
-        -- 破碎动画：各片菱形向外散开 + 缩小 + 渐隐
-        local progress = 1.0 - (wingShatterTimer_ / WING_SHATTER_DURATION)  -- 0→1
-        local fadeAlpha = math.floor((1.0 - progress) * 255)
-        local scatter = progress * playerSize * 0.6
-
-        for _, f in ipairs(feathers) do
-            local shrink = 1.0 - progress * 0.7
-            local len = baseLen * f.lenScale * shrink
-            local wid = baseWid * f.widScale * shrink
-            local rad = math.rad(f.angle)
-            local scatterX = dirSign * math.cos(rad) * scatter
-            local scatterY = math.sin(rad) * scatter + progress * playerSize * 0.2
-            local fcx = baseX + dirSign * math.cos(rad) * playerSize * f.dist + scatterX
-            local fcy = baseY + math.sin(rad) * playerSize * f.dist + scatterY
-
-            local cosA = math.cos(rad) * dirSign
-            local sinA = math.sin(rad)
-            local tipX = fcx + cosA * len * 0.6
-            local tipY = fcy + sinA * len * 0.6
-            local tailX = fcx - cosA * len * 0.4
-            local tailY = fcy - sinA * len * 0.4
-            local sideX1 = fcx + (-sinA) * wid
-            local sideY1 = fcy + cosA * wid * dirSign
-            local sideX2 = fcx - (-sinA) * wid
-            local sideY2 = fcy - cosA * wid * dirSign
-
-            nvgBeginPath(nvg_)
-            nvgMoveTo(nvg_, tipX, tipY)
-            nvgLineTo(nvg_, sideX1, sideY1)
-            nvgLineTo(nvg_, tailX, tailY)
-            nvgLineTo(nvg_, sideX2, sideY2)
-            nvgClosePath(nvg_)
-            if isChar2 then
-                local grad = nvgLinearGradient(nvg_, tailX, tailY, tipX, tipY,
-                    nvgRGBA(40, 5, 15, fadeAlpha), nvgRGBA(220, 40, 40, fadeAlpha))
-                nvgFillPaint(nvg_, grad)
-            else
-                -- 角色1：从内到外 橘色→黄色渐变（带淡出）
-                local grad = nvgLinearGradient(nvg_, tailX, tailY, tipX, tipY,
-                    nvgRGBA(255, 140, 20, fadeAlpha), nvgRGBA(255, 230, 50, fadeAlpha))
-                nvgFillPaint(nvg_, grad)
-            end
-            nvgFill(nvg_)
-        end
-    end
-
-    nvgRestore(nvg_)
+    Renderer.DrawWingsEffect(cx, cy, playerSize)
 end
 
 function DrawSpriteFrame(img, frame, cx, cy, size, flipH)
-    -- 获取当前动画的裁切配置（含可能的自定义grid）
-    local animCropConfig_ = GetCurrentAnimCropConfig()
-    local crop = animCropConfig_[currentAnim_] or { cropW = 1.0, cropH = 1.0, cropOffX = 0.0, cropOffY = 0.0, offsetX = 0.0, offsetY = 0.6 }
-    local cols = crop.cols or SPRITE_COLS
-    local rows = crop.rows or SPRITE_ROWS
-
-    local col = frame % cols
-    local row = math.floor(frame / cols)
-
-    -- 获取图片实际尺寸（蹲走图片可能和其他图片尺寸不同）
-    local actualW, actualH = nvgImageSize(nvg_, img)
-
-    -- 每帧的像素尺寸
-    local frameW = actualW / cols
-    local frameH = actualH / rows
-
-    local srcW = frameW * crop.cropW
-    local srcH = frameH * crop.cropH
-    local srcOffX = frameW * crop.cropOffX
-    local srcOffY = frameH * crop.cropOffY
-
-    -- 绘制区域 - 保持裁切后的宽高比
-    local drawW = size
-    local drawH = size * (srcH / srcW)
-    local oX = crop.offsetX or 0.0
-    local oY = crop.offsetY or 0.6
-    local drawX = cx - drawW / 2 + oX * drawW
-    local drawY = cy - drawH * oY
-
-    nvgSave(nvg_)
-
-    -- 水平翻转
-    if flipH then
-        nvgTranslate(nvg_, cx, 0)
-        nvgScale(nvg_, -1, 1)
-        nvgTranslate(nvg_, -cx, 0)
-    end
-
-    -- 计算 pattern 参数（将裁切区域映射到绘制区域）
-    local patternW = drawW * (actualW / srcW)
-    local patternH = drawH * (actualH / srcH)
-    local cropLeftInFrame = (frameW - srcW) / 2 + srcOffX
-    local cropTopInFrame = (frameH - srcH) / 2 + srcOffY
-    local patternX = drawX - (col * frameW + cropLeftInFrame) * (patternW / actualW)
-    local patternY = drawY - (row * frameH + cropTopInFrame) * (patternH / actualH)
-
-    local paint = nvgImagePattern(nvg_, patternX, patternY, patternW, patternH, 0, img, 1.0)
-
-    nvgBeginPath(nvg_)
-    nvgRect(nvg_, drawX, drawY, drawW, drawH)
-    nvgFillPaint(nvg_, paint)
-    nvgFill(nvg_)
-
-    nvgRestore(nvg_)
+    Renderer.DrawSpriteFrame(img, frame, cx, cy, size, flipH)
 end
 
--- ============================================================================
--- 绘制 HP/MP 血条和魔力条（左上角）
--- ============================================================================
 function DrawHPMPBars(width, height)
-    local sx = width / SCREEN_WIDTH
-    local sy = height / SCREEN_HEIGHT
+    Renderer.DrawHPMPBars(width, height)
+end
 
-    -- 圆形头像参数
-    local avatarSize = 44 * sx
-    local avatarX = 14 * sx
-    local avatarY = 14 * sy
-    local avatarCX = avatarX + avatarSize / 2
-    local avatarCY = avatarY + avatarSize / 2
-    local avatarR = avatarSize / 2
+function DrawDebugInfo(width, height)
+    Renderer.DrawDebugInfo(width, height)
+end
 
-    -- 绘制圆形头像
-    local avatarImg = (currentCharacter_ == 1) and imgAvatar1_ or imgAvatar2_
-    if avatarImg and avatarImg > 0 then
-        nvgSave(nvg_)
-        nvgBeginPath(nvg_)
-        nvgCircle(nvg_, avatarCX, avatarCY, avatarR)
-        local imgPaint = nvgImagePattern(nvg_, avatarX, avatarY, avatarSize, avatarSize, 0, avatarImg, 1.0)
-        nvgFillPaint(nvg_, imgPaint)
-        nvgFill(nvg_)
-        -- 头像边框
-        nvgBeginPath(nvg_)
-        nvgCircle(nvg_, avatarCX, avatarCY, avatarR)
-        nvgStrokeColor(nvg_, nvgRGBA(220, 200, 120, 220))
-        nvgStrokeWidth(nvg_, 2.5 * sx)
-        nvgStroke(nvg_)
-        nvgRestore(nvg_)
-    end
-
-    -- HP/MP 条在头像右侧
-    local barX = avatarX + avatarSize + 8 * sx
-    local barY = avatarY + 2 * sy
-    local barW = 180 * sx
-    local barH = 16 * sy
-    local gap = 6 * sy
-    local cornerR = 4 * sx
-
-    -- HP 条背景
-    nvgBeginPath(nvg_)
-    nvgRoundedRect(nvg_, barX, barY, barW, barH, cornerR)
-    nvgFillColor(nvg_, nvgRGBA(30, 30, 30, 200))
-    nvgFill(nvg_)
-
-    -- HP 条填充
-    local hpRatio = playerHP_ / playerMaxHP_
-    if hpRatio > 0 then
-        nvgBeginPath(nvg_)
-        nvgRoundedRect(nvg_, barX, barY, barW * hpRatio, barH, cornerR)
-        local hpGrad = nvgLinearGradient(nvg_, barX, barY, barX, barY + barH,
-            nvgRGBA(220, 50, 50, 255), nvgRGBA(160, 20, 20, 255))
-        nvgFillPaint(nvg_, hpGrad)
-        nvgFill(nvg_)
-    end
-
-    -- HP 条边框
-    nvgBeginPath(nvg_)
-    nvgRoundedRect(nvg_, barX, barY, barW, barH, cornerR)
-    nvgStrokeColor(nvg_, nvgRGBA(200, 200, 200, 150))
-    nvgStrokeWidth(nvg_, 1.5)
-    nvgStroke(nvg_)
-
-    -- HP 文字
-    nvgFontFace(nvg_, "sans")
-    nvgFontSize(nvg_, 13 * sx)
-    nvgFillColor(nvg_, nvgRGBA(255, 255, 255, 240))
-    nvgTextAlign(nvg_, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
-    nvgText(nvg_, barX + barW / 2, barY + barH / 2, string.format("HP %d/%d", math.floor(playerHP_), math.floor(playerMaxHP_)))
-
-    -- HP 图标（小红心）
-    nvgFontSize(nvg_, 16 * sx)
-    nvgTextAlign(nvg_, NVG_ALIGN_RIGHT + NVG_ALIGN_MIDDLE)
-    nvgFillColor(nvg_, nvgRGBA(255, 80, 80, 255))
-
-    -- MP 条
-    local mpY = barY + barH + gap
-
-    -- MP 条背景
-    nvgBeginPath(nvg_)
-    nvgRoundedRect(nvg_, barX, mpY, barW, barH, cornerR)
-    nvgFillColor(nvg_, nvgRGBA(30, 30, 30, 200))
-    nvgFill(nvg_)
-
-    -- MP 条填充
-    local mpRatio = playerMP_ / playerMaxMP_
-    if mpRatio > 0 then
-        nvgBeginPath(nvg_)
-        nvgRoundedRect(nvg_, barX, mpY, barW * mpRatio, barH, cornerR)
-        local mpGrad = nvgLinearGradient(nvg_, barX, mpY, barX, mpY + barH,
-            nvgRGBA(60, 130, 255, 255), nvgRGBA(30, 80, 200, 255))
-        nvgFillPaint(nvg_, mpGrad)
-        nvgFill(nvg_)
-    end
-
-    -- MP 条边框
-    nvgBeginPath(nvg_)
-    nvgRoundedRect(nvg_, barX, mpY, barW, barH, cornerR)
-    nvgStrokeColor(nvg_, nvgRGBA(200, 200, 200, 150))
-    nvgStrokeWidth(nvg_, 1.5)
-    nvgStroke(nvg_)
-
-    -- MP 文字
-    nvgFontSize(nvg_, 13 * sx)
-    nvgFillColor(nvg_, nvgRGBA(255, 255, 255, 240))
-    nvgTextAlign(nvg_, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
-    nvgText(nvg_, barX + barW / 2, mpY + barH / 2, string.format("MP %d/%d", math.floor(playerMP_), math.floor(playerMaxMP_)))
-
-    -- ====== 技能图标（HP/MP 下方） ======
-    local iconSize = 36 * sx
-    local iconY = mpY + barH + 10 * sy
-    local iconGap = 8 * sx
-    local iconQ, iconE
-    if currentCharacter_ == 2 then
-        iconQ = iconChar2Q_
-        iconE = iconChar2E_
-    else
-        iconQ = iconChar1Q_
-        iconE = iconChar1E_
-    end
-
-    -- Q 技能图标
-    local iconQX = barX
-    if iconQ and iconQ > 0 then
-        local imgPat = nvgImagePattern(nvg_, iconQX, iconY, iconSize, iconSize, 0, iconQ, 1.0)
-        nvgBeginPath(nvg_)
-        nvgRoundedRect(nvg_, iconQX, iconY, iconSize, iconSize, 4 * sx)
-        nvgFillPaint(nvg_, imgPat)
-        nvgFill(nvg_)
-        -- Q技能无CD，不需要CD遮罩
-    end
-    -- Q 标签
-    nvgFontFace(nvg_, "sans")
-    nvgFontSize(nvg_, 10 * sx)
-    nvgFillColor(nvg_, nvgRGBA(255, 255, 255, 200))
-    nvgTextAlign(nvg_, NVG_ALIGN_CENTER + NVG_ALIGN_TOP)
-    nvgText(nvg_, iconQX + iconSize / 2, iconY + iconSize + 2 * sy, "Q")
-
-    -- E 技能图标
-    local iconEX = iconQX + iconSize + iconGap
-    if iconE and iconE > 0 then
-        local imgPat = nvgImagePattern(nvg_, iconEX, iconY, iconSize, iconSize, 0, iconE, 1.0)
-        nvgBeginPath(nvg_)
-        nvgRoundedRect(nvg_, iconEX, iconY, iconSize, iconSize, 4 * sx)
-        nvgFillPaint(nvg_, imgPat)
-        nvgFill(nvg_)
-
-        -- E 技能 CD 遮罩
-        if healCooldownTimer_ > 0 then
-            -- 暗色遮罩
-            nvgBeginPath(nvg_)
-            nvgRoundedRect(nvg_, iconEX, iconY, iconSize, iconSize, 4 * sx)
-            nvgFillColor(nvg_, nvgRGBA(0, 0, 0, 160))
-            nvgFill(nvg_)
-            -- CD 倒计时文字
-            nvgFontFace(nvg_, "sans")
-            nvgFontSize(nvg_, 14 * sx)
-            nvgFillColor(nvg_, nvgRGBA(255, 255, 255, 240))
-            nvgTextAlign(nvg_, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
-            nvgText(nvg_, iconEX + iconSize / 2, iconY + iconSize / 2, string.format("%.1f", healCooldownTimer_))
-        end
-    end
-    -- E 标签
-    nvgFontSize(nvg_, 10 * sx)
-    nvgFillColor(nvg_, nvgRGBA(255, 255, 255, 200))
-    nvgTextAlign(nvg_, NVG_ALIGN_CENTER + NVG_ALIGN_TOP)
-    nvgText(nvg_, iconEX + iconSize / 2, iconY + iconSize + 2 * sy, "E")
-
-    -- 图标边框
-    nvgBeginPath(nvg_)
-    nvgRoundedRect(nvg_, iconQX, iconY, iconSize, iconSize, 4 * sx)
-    nvgStrokeColor(nvg_, nvgRGBA(180, 180, 200, 150))
-    nvgStrokeWidth(nvg_, 1.5)
-    nvgStroke(nvg_)
-    nvgBeginPath(nvg_)
-    nvgRoundedRect(nvg_, iconEX, iconY, iconSize, iconSize, 4 * sx)
-    nvgStrokeColor(nvg_, nvgRGBA(180, 180, 200, 150))
-    nvgStrokeWidth(nvg_, 1.5)
-    nvgStroke(nvg_)
-
-    -- 吸血buff状态指示器（角色2激活时显示）
-    if currentCharacter_ == 2 and lifestealBuffTimer_ > 0 then
-        local buffY = iconY + iconSize + 16 * sy
-        local buffW = 80 * sx
-        local buffH = 14 * sy
-        -- 背景
-        nvgBeginPath(nvg_)
-        nvgRoundedRect(nvg_, barX, buffY, buffW, buffH, 3 * sx)
-        nvgFillColor(nvg_, nvgRGBA(80, 0, 40, 180))
-        nvgFill(nvg_)
-        -- 进度条（剩余时间比例）
-        local buffRatio = lifestealBuffTimer_ / LIFESTEAL_DURATION
-        nvgBeginPath(nvg_)
-        nvgRoundedRect(nvg_, barX, buffY, buffW * buffRatio, buffH, 3 * sx)
-        local buffGrad = nvgLinearGradient(nvg_, barX, buffY, barX + buffW, buffY,
-            nvgRGBA(220, 50, 150, 220), nvgRGBA(180, 30, 100, 220))
-        nvgFillPaint(nvg_, buffGrad)
-        nvgFill(nvg_)
-        -- 边框
-        nvgBeginPath(nvg_)
-        nvgRoundedRect(nvg_, barX, buffY, buffW, buffH, 3 * sx)
-        nvgStrokeColor(nvg_, nvgRGBA(255, 100, 180, 150))
-        nvgStrokeWidth(nvg_, 1.0)
-        nvgStroke(nvg_)
-        -- 文字
-        nvgFontFace(nvg_, "sans")
-        nvgFontSize(nvg_, 10 * sx)
-        nvgFillColor(nvg_, nvgRGBA(255, 220, 240, 255))
-        nvgTextAlign(nvg_, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
-        nvgText(nvg_, barX + buffW / 2, buffY + buffH / 2, string.format("吸血 %.1fs", lifestealBuffTimer_))
-    end
+function DrawSpriteEditor(width, height)
+    -- 已由 SpriteEditor.lua 模块替代
 end
 
 -- ============================================================================
--- UI面板：技能面板（支持鼠标/触屏交互）
+-- UI 面板代理（实际实现在 GameUI.lua）
 -- ============================================================================
 function CreateSkillPanelUI()
-    -- 全屏遮罩 + 居中面板（点击遮罩关闭）
-    skillPanelUI_ = UI.Panel {
-        id = "skillPanelRoot",
-        position = "absolute",
-        top = 0, left = 0,
-        width = "100%", height = "100%",
-        backgroundColor = { 0, 0, 0, 160 },
-        justifyContent = "center",
-        alignItems = "center",
-        onClick = function() ToggleSkillPanel() end,
-        children = {
-            UI.Panel {
-                id = "skillPanelCard",
-                width = 340,
-                backgroundColor = { 15, 20, 40, 240 },
-                borderRadius = 10,
-                borderWidth = 2,
-                borderColor = { 100, 200, 160, 180 },
-                padding = 10,
-                onClick = function() end,  -- 阻止冒泡到遮罩
-                children = {
-                    -- 标题行
-                    UI.Panel {
-                        flexDirection = "row",
-                        justifyContent = "space-between",
-                        alignItems = "center",
-                        marginBottom = 6,
-                        children = {
-                            UI.Label { id = "skillTitle", text = "技能 - 冰法师", fontSize = 14, fontColor = { 150, 255, 200, 255 } },
-                            UI.Label { id = "skillPoints", text = "技能点: 3", fontSize = 12, fontColor = { 255, 220, 80, 255 } },
-                        }
-                    },
-                    -- 分隔线
-                    UI.Panel { width = "100%", height = 1, backgroundColor = { 80, 180, 140, 120 }, marginBottom = 6 },
-                    -- 技能列表容器（横向排列，一行两个）
-                    UI.Panel { id = "skillListContainer", width = "100%", flexDirection = "row", flexWrap = "wrap", gap = 5 },
-                    -- 底部关闭按钮
-                    UI.Panel {
-                        width = "100%", marginTop = 8,
-                        justifyContent = "center", alignItems = "center",
-                        children = {
-                            UI.Button {
-                                text = "关闭(Z)",
-                                fontSize = 12,
-                                variant = "secondary",
-                                onClick = function(self)
-                                    ToggleSkillPanel()
-                                end,
-                            }
-                        }
-                    },
-                }
-            }
-        }
-    }
-    skillPanelUI_:Hide()
+    GameUI.CreateSkillPanelUI()
+    skillPanelUI_ = GameState.skillPanelUI
 end
 
---- 构建技能数据文本
 function BuildSkillStatText_(curData)
-    local statText = ""
-    if curData.dmg then statText = statText .. "伤害:" .. curData.dmg .. " " end
-    if curData.heal then statText = statText .. "回复:" .. curData.heal .. " " end
-    if curData.lifesteal then statText = statText .. "吸血:" .. curData.lifesteal .. "s " end
-    if curData.mp and curData.mp > 0 then statText = statText .. "MP:" .. curData.mp .. " " end
-    if curData.mpSec then statText = statText .. "MP/s:" .. curData.mpSec .. " " end
-    if curData.reduce then statText = statText .. "减伤:" .. math.floor(curData.reduce * 100) .. "% " end
-    if curData.cd then statText = statText .. "CD:" .. curData.cd .. "s " end
-    return statText
+    return GameUI.BuildSkillStatText(curData)
 end
 
---- 刷新技能面板内容（切换角色或加减点后调用）
 function RefreshSkillPanelUI()
-    if not skillPanelUI_ then return end
-    local skills = (currentCharacter_ == 1) and skillList_ or skillList2_
-    local charName = (currentCharacter_ == 1) and "冰法师" or "黑红角娘"
-    local points = skillPoints_[currentCharacter_]
-
-    -- 更新标题和技能点
-    skillPanelUI_:FindById("skillTitle"):SetText("技能 - " .. charName)
-    skillPanelUI_:FindById("skillPoints"):SetText("技能点: " .. points)
-
-    local container = skillPanelUI_:FindById("skillListContainer")
-
-    -- 检查是否需要重建（角色切换时技能数量/内容变化）
-    local needRebuild = (skillPanelCharCache_ ~= currentCharacter_)
-    if needRebuild then
-        skillPanelCharCache_ = currentCharacter_
-        container:RemoveAllChildren()
-    end
-
-    -- 首次构建或角色切换时创建节点
-    if needRebuild then
-        for idx, skill in ipairs(skills) do
-            local curData = skill.levelData[skill.level]
-            local statText = BuildSkillStatText_(curData)
-
-            local skillRow = UI.Panel {
-                id = "skillRow_" .. idx,
-                width = "48%",
-                backgroundColor = { 30, 40, 60, 200 },
-                borderRadius = 5,
-                padding = 6,
-                children = {
-                    UI.Panel {
-                        flexDirection = "row",
-                        justifyContent = "space-between",
-                        alignItems = "center",
-                        marginBottom = 2,
-                        children = {
-                            UI.Label { text = skill.name, fontSize = 11, fontColor = { 220, 240, 255, 255 } },
-                            UI.Label { text = "[" .. skill.key .. "]", fontSize = 9, fontColor = { 255, 220, 100, 220 } },
-                        }
-                    },
-                    UI.Panel {
-                        flexDirection = "row",
-                        alignItems = "center",
-                        gap = 4,
-                        marginBottom = 2,
-                        children = {
-                            UI.Label { id = "skillLv_" .. idx, text = "Lv." .. skill.level .. "/" .. skill.maxLevel, fontSize = 10, fontColor = { 180, 220, 200, 220 } },
-                            UI.Button {
-                                id = "skillMinus_" .. idx,
-                                text = "-",
-                                fontSize = 10,
-                                width = 33, height = 28,
-                                disabled = (skill.level <= 1),
-                                backgroundColor = (skill.level > 1) and { 200, 80, 80, 220 } or { 80, 60, 60, 150 },
-                                textColor = { 255, 255, 255, 255 },
-                                hoverBackgroundColor = { 220, 100, 100, 255 },
-                                pressedBackgroundColor = { 160, 50, 50, 255 },
-                                paddingHorizontal = 6,
-                                paddingVertical = 2,
-                                onClick = function(self)
-                                    if skill.level > 1 then
-                                        skill.level = skill.level - 1
-                                        skillPoints_[currentCharacter_] = skillPoints_[currentCharacter_] + 1
-                                        RefreshSkillPanelUI()
-                                    end
-                                end,
-                            },
-                            UI.Button {
-                                id = "skillPlus_" .. idx,
-                                text = "+",
-                                fontSize = 10,
-                                width = 33, height = 28,
-                                disabled = (skill.level >= skill.maxLevel or points <= 0),
-                                backgroundColor = (skill.level < skill.maxLevel and points > 0) and { 60, 180, 100, 220 } or { 60, 80, 60, 150 },
-                                textColor = { 255, 255, 255, 255 },
-                                hoverBackgroundColor = { 80, 200, 120, 255 },
-                                pressedBackgroundColor = { 40, 140, 70, 255 },
-                                paddingHorizontal = 6,
-                                paddingVertical = 2,
-                                onClick = function(self)
-                                    if skill.level < skill.maxLevel and skillPoints_[currentCharacter_] > 0 then
-                                        skill.level = skill.level + 1
-                                        skillPoints_[currentCharacter_] = skillPoints_[currentCharacter_] - 1
-                                        RefreshSkillPanelUI()
-                                    end
-                                end,
-                            },
-                        }
-                    },
-                    UI.Label { id = "skillStat_" .. idx, text = statText, fontSize = 9, fontColor = { 150, 220, 180, 200 } },
-                    UI.Label { text = skill.desc, fontSize = 8, fontColor = { 160, 180, 200, 170 }, marginTop = 1 },
-                }
-            }
-            container:AddChild(skillRow)
-        end
-    else
-        -- 仅更新动态内容，不重建节点（避免闪烁）
-        for idx, skill in ipairs(skills) do
-            local curData = skill.levelData[skill.level]
-            local statText = BuildSkillStatText_(curData)
-
-            container:FindById("skillLv_" .. idx):SetText("Lv." .. skill.level .. "/" .. skill.maxLevel)
-            container:FindById("skillStat_" .. idx):SetText(statText)
-
-            local minusBtn = container:FindById("skillMinus_" .. idx)
-            minusBtn:SetDisabled(skill.level <= 1)
-            minusBtn:SetBackgroundColor((skill.level > 1) and { 200, 80, 80, 220 } or { 80, 60, 60, 150 })
-
-            local plusBtn = container:FindById("skillPlus_" .. idx)
-            plusBtn:SetDisabled(skill.level >= skill.maxLevel or points <= 0)
-            plusBtn:SetBackgroundColor((skill.level < skill.maxLevel and points > 0) and { 60, 180, 100, 220 } or { 60, 80, 60, 150 })
-        end
-    end
+    SyncToSharedState()
+    GameUI.RefreshSkillPanelUI()
+    -- 同步回变更
+    skillPanelCharCache_ = GameState.skillPanelCharCache
 end
 
---- 显示ESC离开确认弹窗（UI版）
 function ShowEscPopupUI()
-    if not escPopupUI_ then return end
-    -- 更新当前区域名称
-    local areaConfig = WorldMap.GetCurrentArea() and LevelConfig.GetArea(WorldMap.GetCurrentArea())
-    local areaName = areaConfig and areaConfig.name or "未知区域"
-    escPopupUI_:FindById("escAreaName"):SetText("当前区域: " .. areaName)
-    escPopupUI_:Show()
+    SyncToSharedState()
+    GameUI.ShowEscPopupUI()
 end
 
---- 切换技能面板显示
 function ToggleSkillPanel()
-    showSkillPanel_ = not showSkillPanel_
-    if showSkillPanel_ then
-        showInventory_ = false
-        if inventoryPanelUI_ then inventoryPanelUI_:Hide() end
-        RefreshSkillPanelUI()
-        skillPanelUI_:Show()
-    else
-        skillPanelUI_:Hide()
-    end
+    SyncToSharedState()
+    GameUI.ToggleSkillPanel()
+    -- 同步回变更
+    showSkillPanel_ = GameState.showSkillPanel
+    showInventory_ = GameState.showInventory
 end
 
--- ============================================================================
--- UI面板：背包面板（支持鼠标/触屏交互）
--- ============================================================================
 function CreateInventoryPanelUI()
-    inventoryPanelUI_ = UI.Panel {
-        id = "invPanelRoot",
-        position = "absolute",
-        top = 0, left = 0,
-        width = "100%", height = "100%",
-        backgroundColor = { 0, 0, 0, 160 },
-        justifyContent = "center",
-        alignItems = "center",
-        onClick = function() ToggleInventoryPanel() end,
-        children = {
-            UI.Panel {
-                id = "invPanelCard",
-                width = 380,
-                backgroundColor = { 15, 20, 40, 240 },
-                borderRadius = 12,
-                borderWidth = 2,
-                borderColor = { 100, 160, 255, 180 },
-                padding = 16,
-                onClick = function() end,  -- 阻止冒泡到遮罩
-                children = {
-                    -- 标题
-                    UI.Label { text = "背包", fontSize = 20, fontColor = { 180, 220, 255, 255 }, marginBottom = 8, alignSelf = "center" },
-                    -- 分隔线
-                    UI.Panel { width = "100%", height = 1, backgroundColor = { 80, 120, 200, 120 }, marginBottom = 10 },
-                    -- 物品容器
-                    UI.Panel { id = "invItemsContainer", width = "100%", flexDirection = "row", flexWrap = "wrap", gap = 8, justifyContent = "center", minHeight = 100 },
-                    -- 底部关闭按钮
-                    UI.Panel {
-                        width = "100%", marginTop = 12,
-                        justifyContent = "center", alignItems = "center",
-                        children = {
-                            UI.Button {
-                                text = "关闭 (B)",
-                                variant = "secondary",
-                                onClick = function(self)
-                                    ToggleInventoryPanel()
-                                end,
-                            }
-                        }
-                    },
-                }
-            }
-        }
-    }
-    inventoryPanelUI_:Hide()
+    GameUI.CreateInventoryPanelUI()
+    inventoryPanelUI_ = GameState.inventoryPanelUI
 end
 
---- 刷新背包面板内容
 function RefreshInventoryPanelUI()
-    if not inventoryPanelUI_ then return end
-    local container = inventoryPanelUI_:FindById("invItemsContainer")
-    container:RemoveAllChildren()
-
-    if #inventoryItems_ == 0 then
-        container:AddChild(UI.Label {
-            text = "背包空空如也...",
-            fontSize = 14,
-            fontColor = { 120, 140, 180, 180 },
-            alignSelf = "center",
-        })
-        return
-    end
-
-    local iconSymbols = {
-        potion = "药", crystal = "晶", heart = "心",
-        shard = "碎", cloak = "披", rune = "符",
-    }
-    local iconColors = {
-        potion = { 255, 100, 100, 255 },
-        crystal = { 100, 180, 255, 255 },
-        heart = { 200, 50, 255, 255 },
-        shard = { 150, 220, 255, 255 },
-        cloak = { 100, 200, 150, 255 },
-        rune = { 255, 200, 80, 255 },
-    }
-
-    for _, item in ipairs(inventoryItems_) do
-        local color = iconColors[item.icon] or { 200, 200, 200, 255 }
-        local symbol = iconSymbols[item.icon] or "?"
-
-        local slot = UI.Panel {
-            width = 64, height = 80,
-            alignItems = "center",
-            justifyContent = "center",
-            children = {
-                -- 格子背景
-                UI.Panel {
-                    width = 56, height = 56,
-                    backgroundColor = { 40, 50, 80, 200 },
-                    borderRadius = 6,
-                    borderWidth = 1,
-                    borderColor = { 80, 120, 180, 150 },
-                    justifyContent = "center",
-                    alignItems = "center",
-                    children = {
-                        UI.Label { text = symbol, fontSize = 22, fontColor = color },
-                        -- 数量角标
-                        (item.count > 1) and UI.Label {
-                            text = "x" .. item.count,
-                            fontSize = 10,
-                            fontColor = { 255, 255, 200, 255 },
-                            position = "absolute",
-                            bottom = 2, right = 4,
-                        } or nil,
-                    }
-                },
-                -- 物品名
-                UI.Label { text = item.name, fontSize = 10, fontColor = { 200, 220, 255, 220 }, marginTop = 2 },
-            }
-        }
-        container:AddChild(slot)
-    end
+    SyncToSharedState()
+    GameUI.RefreshInventoryPanelUI()
 end
 
---- 切换背包面板显示
 function ToggleInventoryPanel()
-    showInventory_ = not showInventory_
-    if showInventory_ then
-        showSkillPanel_ = false
-        if skillPanelUI_ then skillPanelUI_:Hide() end
-        RefreshInventoryPanelUI()
-        inventoryPanelUI_:Show()
-    else
-        inventoryPanelUI_:Hide()
-    end
+    SyncToSharedState()
+    GameUI.ToggleInventoryPanel()
+    -- 同步回变更
+    showInventory_ = GameState.showInventory
+    showSkillPanel_ = GameState.showSkillPanel
 end
-
--- ============================================================================
--- [已移除] 旧NanoVG面板代码已由UI系统替代（见 CreateSkillPanelUI / CreateInventoryPanelUI）
--- ============================================================================
-
--- ============================================================================
--- 调试信息
--- ============================================================================
-function DrawDebugInfo(width, height)
-    nvgFontFace(nvg_, "sans")
-    nvgFontSize(nvg_, 14)
-    nvgFillColor(nvg_, nvgRGBA(255, 255, 0, 255))
-
-    local y = 16
-    local lineH = 16
-
-    local posStr = "nil"
-    local screenStr = "nil"
-    if playerNode_ then
-        local pos = playerNode_.position2D
-        posStr = string.format("%.1f, %.1f", pos.x, pos.y)
-
-        local camPos = cameraNode_ and cameraNode_.worldPosition or Vector3(0, 0, -10)
-        local sx, sy = PhysicsToScreen(pos.x, pos.y, camPos.x, camPos.y)
-        sx = sx * (width / SCREEN_WIDTH)
-        sy = sy * (height / SCREEN_HEIGHT)
-        screenStr = string.format("%.0f, %.0f", sx, sy)
-    end
-
-    local texts = {
-        "Idle=" .. tostring(imgIdle_) .. " Run=" .. tostring(imgRun_) .. " W=" .. tostring(imgWidth_),
-        "Pos=" .. posStr .. " Scr=" .. screenStr,
-        "Anim=" .. currentAnim_ .. " F=" .. animFrame_ .. " Gnd=" .. tostring(onGround_),
-    }
-    for _, t in ipairs(texts) do
-        nvgText(nvg_, 10, y, t)
-        y = y + lineH
-    end
-
-    -- 在屏幕中心画一个红色十字标记，确认渲染管线正常
-    nvgBeginPath(nvg_)
-    nvgCircle(nvg_, width / 2, height / 2, 5)
-    nvgFillColor(nvg_, nvgRGBA(255, 0, 0, 200))
-    nvgFill(nvg_)
-end
-
--- ============================================================================
--- 旧切图编辑器（已由 SpriteEditor.lua 模块替代，保留空函数避免引用错误）
--- ============================================================================
-function DrawSpriteEditor(width, height)
-end
-
---[[ 旧编辑器代码已移至 SpriteEditor.lua 模块
-    -- 半透明黑底
-    nvgBeginPath(nvg_)
-    nvgRect(nvg_, 0, 0, width, height)
-    nvgFillColor(nvg_, nvgRGBA(0, 0, 0, 200))
-    nvgFill(nvg_)
-
-    -- 获取当前动画的图片（根据当前角色，与editorAnimNames_对应）
-    local animImages
-    if currentCharacter_ == 2 then
-        animImages = { img2Idle_, img2Run_, img2Jump_, img2Attack_, img2Block_, img2Burst_, img2Heal_, img2Crouch_, img2CrouchWalk_, img2Hit_ }
-    else
-        animImages = { imgIdle_, imgRun_, imgJump_, imgAttack_, imgBlock_, imgCharge_, imgHeal_, imgCrouch_, imgCrouchWalk_, imgHit_ }
-    end
-    local img = animImages[editorAnimIdx_]
-    local animName = editorAnimNames_[editorAnimIdx_]
-
-    -- 左侧：显示整张序列帧 + 网格线
-    local sheetDisplayW = width * 0.45
-    local sheetDisplayH = sheetDisplayW * (imgHeight_ / imgWidth_)
-    local sheetX = 20
-    local sheetY = 60
-
-    if img and img > 0 and imgWidth_ > 0 then
-        -- 绘制整张序列帧
-        local paint = nvgImagePattern(nvg_, sheetX, sheetY, sheetDisplayW, sheetDisplayH, 0, img, 1.0)
-        nvgBeginPath(nvg_)
-        nvgRect(nvg_, sheetX, sheetY, sheetDisplayW, sheetDisplayH)
-        nvgFillPaint(nvg_, paint)
-        nvgFill(nvg_)
-
-        -- 绘制网格线
-        nvgStrokeColor(nvg_, nvgRGBA(255, 255, 255, 80))
-        nvgStrokeWidth(nvg_, 1)
-        local cellW = sheetDisplayW / SPRITE_COLS
-        local cellH = sheetDisplayH / SPRITE_ROWS
-        for c = 1, SPRITE_COLS - 1 do
-            nvgBeginPath(nvg_)
-            nvgMoveTo(nvg_, sheetX + c * cellW, sheetY)
-            nvgLineTo(nvg_, sheetX + c * cellW, sheetY + sheetDisplayH)
-            nvgStroke(nvg_)
-        end
-        for r = 1, SPRITE_ROWS - 1 do
-            nvgBeginPath(nvg_)
-            nvgMoveTo(nvg_, sheetX, sheetY + r * cellH)
-            nvgLineTo(nvg_, sheetX + sheetDisplayW, sheetY + r * cellH)
-            nvgStroke(nvg_)
-        end
-
-        -- 高亮当前帧
-        local curCol = editorFrame_ % SPRITE_COLS
-        local curRow = math.floor(editorFrame_ / SPRITE_COLS)
-        nvgBeginPath(nvg_)
-        nvgRect(nvg_, sheetX + curCol * cellW, sheetY + curRow * cellH, cellW, cellH)
-        nvgStrokeColor(nvg_, nvgRGBA(0, 255, 0, 255))
-        nvgStrokeWidth(nvg_, 3)
-        nvgStroke(nvg_)
-    end
-
-    -- 右侧：单帧预览（使用当前 offset/scale/crop 参数）
-    local previewCenterX = width * 0.75
-    local previewCenterY = height * 0.4
-    local previewSize = PLAYER_RADIUS * editorScale_ * PIXELS_PER_UNIT * (width / SCREEN_WIDTH)
-
-    -- 绘制参考十字线（标记物理中心点）
-    nvgStrokeColor(nvg_, nvgRGBA(255, 0, 0, 150))
-    nvgStrokeWidth(nvg_, 1)
-    nvgBeginPath(nvg_)
-    nvgMoveTo(nvg_, previewCenterX - 50, previewCenterY)
-    nvgLineTo(nvg_, previewCenterX + 50, previewCenterY)
-    nvgStroke(nvg_)
-    nvgBeginPath(nvg_)
-    nvgMoveTo(nvg_, previewCenterX, previewCenterY - 50)
-    nvgLineTo(nvg_, previewCenterX, previewCenterY + 50)
-    nvgStroke(nvg_)
-
-    -- 绘制当前帧预览（带裁切参数）
-    if img and img > 0 and imgWidth_ > 0 then
-        local frameW = imgWidth_ / SPRITE_COLS
-        local frameH = imgHeight_ / SPRITE_ROWS
-
-        -- 裁切后的源区域（像素）
-        local srcW = frameW * editorCropW_
-        local srcH = frameH * editorCropH_
-        local srcOffX = frameW * editorCropOffX_
-        local srcOffY = frameH * editorCropOffY_
-
-        -- 绘制尺寸（保持裁切后的宽高比）
-        local drawW = previewSize
-        local drawH = previewSize * (srcH / srcW)
-        local drawX = previewCenterX - drawW / 2 + editorOffsetX_ * drawW
-        local drawY = previewCenterY - drawH * editorOffsetY_
-
-        -- 计算 pattern：将裁切区域映射到绘制区域
-        local col = editorFrame_ % SPRITE_COLS
-        local row = math.floor(editorFrame_ / SPRITE_COLS)
-
-        -- pattern 尺寸 = 整张图缩放到裁切后每帧占 drawW x drawH
-        local patternW = drawW * (imgWidth_ / srcW)
-        local patternH = drawH * (imgHeight_ / srcH)
-        -- pattern 起点 = drawX 减去当前帧裁切区域左上角在整图中的偏移
-        local cropLeftInFrame = (frameW - srcW) / 2 + srcOffX
-        local cropTopInFrame = (frameH - srcH) / 2 + srcOffY
-        local patternX = drawX - (col * frameW + cropLeftInFrame) * (patternW / imgWidth_)
-        local patternY = drawY - (row * frameH + cropTopInFrame) * (patternH / imgHeight_)
-
-        local paint = nvgImagePattern(nvg_, patternX, patternY, patternW, patternH, 0, img, 1.0)
-        nvgBeginPath(nvg_)
-        nvgRect(nvg_, drawX, drawY, drawW, drawH)
-        nvgFillPaint(nvg_, paint)
-        nvgFill(nvg_)
-
-        -- 帧边框
-        nvgBeginPath(nvg_)
-        nvgRect(nvg_, drawX, drawY, drawW, drawH)
-        nvgStrokeColor(nvg_, nvgRGBA(0, 255, 255, 150))
-        nvgStrokeWidth(nvg_, 2)
-        nvgStroke(nvg_)
-    end
-
-    -- 在序列帧上也显示裁切框
-    if img and img > 0 and imgWidth_ > 0 then
-        local cellW = sheetDisplayW / SPRITE_COLS
-        local cellH = sheetDisplayH / SPRITE_ROWS
-        local curCol = editorFrame_ % SPRITE_COLS
-        local curRow = math.floor(editorFrame_ / SPRITE_COLS)
-
-        local cropRectW = cellW * editorCropW_
-        local cropRectH = cellH * editorCropH_
-        local cropRectX = sheetX + curCol * cellW + (cellW - cropRectW) / 2 + cellW * editorCropOffX_
-        local cropRectY = sheetY + curRow * cellH + (cellH - cropRectH) / 2 + cellH * editorCropOffY_
-
-        nvgBeginPath(nvg_)
-        nvgRect(nvg_, cropRectX, cropRectY, cropRectW, cropRectH)
-        nvgStrokeColor(nvg_, nvgRGBA(255, 255, 0, 200))
-        nvgStrokeWidth(nvg_, 2)
-        nvgStroke(nvg_)
-    end
-
-    -- 数据面板
-    nvgFontFace(nvg_, "sans")
-    nvgFontSize(nvg_, 16)
-
-    local dataX = width * 0.55
-    local dataY = height * 0.7
-    local lineH = 22
-
-    nvgFillColor(nvg_, nvgRGBA(0, 255, 0, 255))
-    nvgText(nvg_, dataX, dataY, "=== 切图数据 (发给AI调整) ===")
-    dataY = dataY + lineH
-
-    -- 参数列表，当前选中的高亮
-    local paramValues = {
-        string.format("offsetX: %.2f", editorOffsetX_),
-        string.format("offsetY: %.2f", editorOffsetY_),
-        string.format("scale: %.1f", editorScale_),
-        string.format("cropW: %.2f", editorCropW_),
-        string.format("cropH: %.2f", editorCropH_),
-        string.format("cropOffX: %.2f", editorCropOffX_),
-        string.format("cropOffY: %.2f", editorCropOffY_),
-    }
-    for i, text in ipairs(paramValues) do
-        if i == editorParam_ then
-            nvgFillColor(nvg_, nvgRGBA(255, 100, 100, 255))
-            nvgText(nvg_, dataX, dataY, "▶ " .. text)
-        else
-            nvgFillColor(nvg_, nvgRGBA(255, 255, 100, 255))
-            nvgText(nvg_, dataX, dataY, "  " .. text)
-        end
-        dataY = dataY + lineH
-    end
-
-    dataY = dataY + 4
-    nvgFillColor(nvg_, nvgRGBA(180, 220, 255, 255))
-    nvgText(nvg_, dataX, dataY, string.format("动画: %s  帧: %d/%d  网格: %dx%d  图: %dx%d",
-        animName, editorFrame_, SPRITE_FRAMES - 1, SPRITE_COLS, SPRITE_ROWS, imgWidth_, imgHeight_))
-
-    -- 操作提示
-    nvgFontSize(nvg_, 14)
-    nvgFillColor(nvg_, nvgRGBA(180, 180, 180, 255))
-    local helpY = 30
-    nvgText(nvg_, 20, helpY, "[1]退出  [Q/E]切换动画  [A/D]切换帧  [W/S]选参数  [ [ / ] ]调值(红色项)")
---]]
 
 -- ============================================================================
 -- UI 说明
