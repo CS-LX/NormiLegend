@@ -14,6 +14,7 @@ S.showMainMenu = false
 S.titleVideoPlayer = nil
 S.titleUIRoot = nil
 S.mainMenuUIRoot = nil
+S.enteredGameFromChapterSelect = false  -- 从章节选择进入游戏世界（番外篇），ESC返回章节选择
 
 -- 引擎对象
 S.scene = nil          ---@type Scene
@@ -23,7 +24,7 @@ S.nvg = nil
 
 -- 玩家物理
 S.playerNode = nil     ---@type Node
-S.playerBody = nil
+S.playerBody = nil     ---@type RigidBody2D
 S.footSensor = nil
 S.onGround = false
 S.groundContactCount = 0
@@ -115,22 +116,8 @@ S.skillList2 = {
       levelData = { {reduce=0.40,mpSec=5}, {reduce=0.45,mpSec=5}, {reduce=0.50,mpSec=5} } },
 }
 
--- 可变技能数值（可被GM控制台修改）
-S.PROJECTILE_DAMAGE = C.INIT_PROJECTILE_DAMAGE
-S.CHARGE_MP_COST = C.INIT_CHARGE_MP_COST
-S.CHARGE_DAMAGE = C.INIT_CHARGE_DAMAGE
-S.CHARGE_FREEZE_DURATION = C.INIT_CHARGE_FREEZE_DURATION
-S.HEAL_MP_COST = C.INIT_HEAL_MP_COST
-S.HEAL_HP_RESTORE = C.INIT_HEAL_HP_RESTORE
-S.BLOCK_MP_PER_SEC = C.INIT_BLOCK_MP_PER_SEC
-S.CHAR2_MELEE_DAMAGE = C.CHAR2_MELEE_DAMAGE
-S.CHAR2_MELEE_RANGE = C.CHAR2_MELEE_RANGE
-S.CHAR2_DASH_DAMAGE = C.CHAR2_DASH_DAMAGE
-S.CHAR2_BLEED_DURATION = C.CHAR2_BLEED_DURATION
-S.CHAR2_BLEED_DPS = C.CHAR2_BLEED_DPS
-S.CHAR2_DASH_SPEED = C.CHAR2_DASH_SPEED
-S.LIFESTEAL_DURATION = C.LIFESTEAL_DURATION
-S.LIFESTEAL_RATIO = C.LIFESTEAL_RATIO
+-- 注意: 技能数值直接存放在 GameConfig (C.*) 上，GM控制台直接修改 C.*
+-- Combat.lua 等模块通过 require("GameConfig") 读取，不再在此处建副本
 
 -- 角色2突进
 S.isDashing = false

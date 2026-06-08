@@ -10,6 +10,7 @@ local Enemy = require("Enemy")
 local BatEnemy = require("BatEnemy")
 local CastleEnemies = require("CastleEnemies")
 local LevelConfig = require("LevelConfig")
+local TitleMenu = require("TitleMenu")
 
 local M = {}
 
@@ -59,7 +60,13 @@ function M.HandleRender(eventType, eventData)
     nvgBeginFrame(S.nvg, physW, physH, 1.0)
 
     -- 标题视频页面 / 主菜单 → 不渲染游戏画面（UI 自行处理）
+    -- 例外：预览模式需要渲染地形和玩家；编辑器模式渲染画布贴图
     if S.showTitleScreen or S.showMainMenu then
+        if TitleMenu.IsPreviewActive() then
+            TitleMenu.DrawPreview(S.nvg, physW, physH)
+        elseif TitleMenu.IsLevelEditorOpen() then
+            TitleMenu.DrawEditorCanvasTextures(S.nvg, physW, physH)
+        end
         nvgEndFrame(S.nvg)
         return
     end
@@ -122,10 +129,8 @@ function M.HandleRender(eventType, eventData)
     -- 地面冰晶
     M.DrawIceCrystals(width, height, camX, camY)
 
-    -- HP/MP 血条
-    if not S.editorMode then
-        M.DrawHPMPBars(width, height)
-    end
+    -- HP/MP 血条（编辑器打开时仍然显示）
+    M.DrawHPMPBars(width, height)
 
     -- 调试信息
     if not S.editorMode and S.debugDraw then
@@ -1287,7 +1292,7 @@ function M.DrawHPMPBars(width, height)
         nvgRoundedRect(vg, barX, buffY, buffW, buffH, 3 * sx)
         nvgFillColor(vg, nvgRGBA(80, 0, 40, 180))
         nvgFill(vg)
-        local buffRatio = S.lifestealBuffTimer / S.LIFESTEAL_DURATION
+        local buffRatio = S.lifestealBuffTimer / C.LIFESTEAL_DURATION
         nvgBeginPath(vg)
         nvgRoundedRect(vg, barX, buffY, buffW * buffRatio, buffH, 3 * sx)
         local buffGrad = nvgLinearGradient(vg, barX, buffY, barX + buffW, buffY,

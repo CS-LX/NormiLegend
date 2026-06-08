@@ -35,6 +35,11 @@ local lastTime_ = 0
 
 --- 初始化自定义光标（在 UI.Init 之后调用）
 function M.Init()
+    -- [临时禁用] 使用系统默认光标，保留代码不删除
+    input.mouseVisible = true
+    print("[Cursor] Custom cursor DISABLED, using system default")
+    do return end
+
     local nvg = UI.GetNVGContext()
     if not nvg then
         print("[Cursor] WARNING: UI NVG context not available")

@@ -628,6 +628,8 @@ end
 
 function SpriteEditor.Show()
     visible_ = true
+    local S = require("GameState")
+    S.editorMode = true
     if editorPanel_ then
         editorPanel_:Show()
         RefreshPrimaryButtons()
@@ -639,6 +641,9 @@ end
 
 function SpriteEditor.Hide()
     visible_ = false
+    -- 同步 editorMode 标志，确保所有关闭路径都能恢复游戏输入
+    local S = require("GameState")
+    S.editorMode = false
     if editorPanel_ then
         editorPanel_:Hide()
     end
