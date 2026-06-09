@@ -1286,75 +1286,161 @@ M.DrawEditorCanvasTextures = EditorRenderer.DrawEditorCanvasTextures
 -- DrawPreview + _executeStrategy（已提取到 editor/EditorPreview.lua）
 M.DrawPreview = EditorPreview.DrawPreview
 M._executeStrategy = EditorPreview._executeStrategy
---- 导出关卡地形数据
+--- 导出关卡完整数据（JSON 格式，写入文件 + UI 反馈）
 function M.ExportLevelTerrainData()
     local ch = levelEditor_.chapterIdx
     local lv = levelEditor_.levelIdx
     local key = ch .. "_" .. lv
     local objects = levelEditor_.objects[key] or {}
     local chapName = CHAPTER_DATA[ch] and CHAPTER_DATA[ch].name or ("第" .. ch .. "章")
-    local lvName = levelData_[ch][lv].name
+    local chapterLevels = MenuFlow.levelData_ and MenuFlow.levelData_[ch]
+    local lvName = (chapterLevels and chapterLevels[lv] and chapterLevels[lv].name) or ("关卡" .. lv)
 
-    local lines = {}
-    table.insert(lines, "-- " .. chapName .. " " .. lvName .. " 地形数据 --")
-    table.insert(lines, "-- type: platform/obstacle/trigger/executor/ground")
-    table.insert(lines, "-- x,y: 位置(米)  w,h: 尺寸(米)")
-    table.insert(lines, "-- trigger.triggerMethod: none/touch/interact/attack/other")
-    table.insert(lines, "-- trigger.mappings: 映射的执行器索引列表")
-    table.insert(lines, "-- executor.executorEffect: none/other")
-    table.insert(lines, string.format('terrain["%s"] = {', key))
-    for i, obj in ipairs(objects) do
-        local extra = ""
-        if obj.type == "trigger" then
-            -- 触发方式
-            local tm = obj.triggerMethod or "none"
-            extra = extra .. string.format(', triggerMethod="%s"', tm)
-            if tm == "other" and obj.triggerMethodDesc and obj.triggerMethodDesc ~= "" then
-                extra = extra .. string.format(', triggerMethodDesc="%s"', obj.triggerMethodDesc)
-            end
-            -- 映射
-            if obj.mappings and #obj.mappings > 0 then
-                local mStrs = {}
-                for _, mIdx in ipairs(obj.mappings) do
-                    table.insert(mStrs, tostring(mIdx))
-                end
-                extra = extra .. string.format(', mappings={%s}', table.concat(mStrs, ","))
-            end
-            -- 策略树
-            if obj.triggerStrategy and obj.triggerStrategy.rootId then
-                local SN = require("StrategyNode")
-                local stratData = SN.Serialize(obj.triggerStrategy)
-                local stratJson = cjson.encode(stratData)
-                extra = extra .. string.format(", triggerStrategy=%q", stratJson)
-            end
-        elseif obj.type == "executor" then
-            extra = ', hasCollision=true'
-            -- 执行效果
-            local ef = obj.executorEffect or "none"
-            extra = extra .. string.format(', executorEffect="%s"', ef)
-            if ef == "other" and obj.executorEffectDesc and obj.executorEffectDesc ~= "" then
-                extra = extra .. string.format(', executorEffectDesc="%s"', obj.executorEffectDesc)
-            end
-            -- 策略树
-            if obj.executorStrategy and obj.executorStrategy.rootId then
-                local SN = require("StrategyNode")
-                local stratData = SN.Serialize(obj.executorStrategy)
-                local stratJson = cjson.encode(stratData)
-                extra = extra .. string.format(", executorStrategy=%q", stratJson)
+    -- 序列化单个物件
+    local function serializeObject(obj)
+        local o = {
+            type = obj.type,
+            x = obj.x,
+            y = obj.y,
+            w = obj.w,
+            h = obj.h,
+            name = obj.name or "",
+        }
+        -- 颜色
+        if obj.color then
+            o.color = obj.color  -- {r, g, b, a}
+        end
+        -- 贴图层
+        if obj.texLayers and #obj.texLayers > 0 then
+            o.texLayers = {}
+            for _, layer in ipairs(obj.texLayers) do
+                table.insert(o.texLayers, {
+                    path = layer.path,
+                    name = layer.name,
+                    opacity = layer.opacity,
+                    scaleW = layer.scaleW,
+                    scaleH = layer.scaleH,
+                    visible = layer.visible,
+                })
             end
         end
-        table.insert(lines, string.format(
-            '  {type="%s", x=%.1f, y=%.1f, w=%.1f, h=%.1f, name="%s"%s},',
-            obj.type, obj.x, obj.y, obj.w, obj.h, obj.name or "", extra
-        ))
+        -- 触发器专有字段
+        if obj.type == "trigger" then
+            o.triggerMethod = obj.triggerMethod or "none"
+            if o.triggerMethod == "other" and obj.triggerMethodDesc and obj.triggerMethodDesc ~= "" then
+                o.triggerMethodDesc = obj.triggerMethodDesc
+            end
+            if obj.mappings and #obj.mappings > 0 then
+                o.mappings = obj.mappings
+            end
+            if obj.triggerStrategy and obj.triggerStrategy.rootId then
+                local SN = require("StrategyNode")
+                o.triggerStrategy = SN.Serialize(obj.triggerStrategy)
+            end
+        end
+        -- 执行器专有字段
+        if obj.type == "executor" then
+            o.hasCollision = true
+            o.executorEffect = obj.executorEffect or "none"
+            if o.executorEffect == "other" and obj.executorEffectDesc and obj.executorEffectDesc ~= "" then
+                o.executorEffectDesc = obj.executorEffectDesc
+            end
+            if obj.executorStrategy and obj.executorStrategy.rootId then
+                local SN = require("StrategyNode")
+                o.executorStrategy = SN.Serialize(obj.executorStrategy)
+            end
+        end
+        return o
     end
-    table.insert(lines, "}")
 
-    local exportText = table.concat(lines, "\n")
-    print("[TERRAIN EXPORT] " .. chapName .. " " .. lvName)
-    print(exportText)
+    -- 序列化物件列表
+    local serializedObjects = {}
+    for _, obj in ipairs(objects) do
+        table.insert(serializedObjects, serializeObject(obj))
+    end
+
+    -- 序列化背景图层
+    local serializedBgLayers = {}
+    if levelEditor_.bgLayers then
+        for _, bg in ipairs(levelEditor_.bgLayers) do
+            table.insert(serializedBgLayers, {
+                path = bg.path,
+                name = bg.name,
+                opacity = bg.opacity,
+                x = bg.x,
+                y = bg.y,
+                w = bg.w,
+                h = bg.h,
+                depth = bg.depth,
+                visible = bg.visible,
+            })
+        end
+    end
+
+    -- 序列化自定义贴图素材
+    local serializedCustomTextures = {}
+    if levelEditor_.customTextures then
+        for _, tex in ipairs(levelEditor_.customTextures) do
+            table.insert(serializedCustomTextures, {
+                path = tex.path,
+                name = tex.name,
+                cat = tex.cat,
+            })
+        end
+    end
+
+    -- 组装完整导出数据
+    local exportData = {
+        version = 1,
+        chapter = ch,
+        level = lv,
+        key = key,
+        chapterName = chapName,
+        levelName = lvName,
+        -- 世界尺寸参数
+        worldW = levelEditor_.worldW,
+        worldH = levelEditor_.worldH,
+        -- 镜头范围
+        cameraBounds = {
+            enabled = levelEditor_.cameraBoundsEnabled,
+            x = levelEditor_.cameraBounds.x,
+            y = levelEditor_.cameraBounds.y,
+            w = levelEditor_.cameraBounds.w,
+            h = levelEditor_.cameraBounds.h,
+        },
+        -- 地形物件
+        objects = serializedObjects,
+        -- 背景图层
+        bgLayers = serializedBgLayers,
+        -- 自定义贴图素材库
+        customTextures = serializedCustomTextures,
+    }
+
+    -- 编码为 JSON
+    local exportJson = cjson.encode(exportData)
+
+    -- 写入文件
+    fileSystem:CreateDir("levels")
+    local filePath = "levels/" .. key .. ".json"
+    local file = File(filePath, FILE_WRITE)
+    local writeOk = false
+    if file:IsOpen() then
+        file:WriteString(exportJson)
+        file:Close()
+        writeOk = true
+        print("[LEVEL EXPORT] 已写入文件: " .. filePath)
+    else
+        print("[LEVEL EXPORT] 写入文件失败: " .. filePath)
+    end
+
+    -- 同时打印到控制台（便于调试）
+    print("[LEVEL EXPORT] " .. chapName .. " " .. lvName .. " (JSON)")
+    print(exportJson)
 
     -- 显示导出面板
+    local statusText = writeOk
+        and ("已导出到 " .. filePath)
+        or "导出失败（文件写入错误）"
     local exportOverlay = UI.Panel {
         id = "terrain_export_overlay",
         position = "absolute", top = "8%", left = "20%",
@@ -1366,8 +1452,12 @@ function M.ExportLevelTerrainData()
         flexDirection = "column", gap = 12,
         children = {
             UI.Label {
-                text = "地形数据导出（已打印到控制台）",
+                text = "关卡数据导出（JSON）",
                 fontSize = 15, fontColor = {180, 220, 255, 255},
+            },
+            UI.Label {
+                text = statusText,
+                fontSize = 12, fontColor = writeOk and {120, 255, 120, 255} or {255, 120, 120, 255},
             },
             UI.Panel {
                 width = "100%", maxHeight = 350,
@@ -1378,7 +1468,7 @@ function M.ExportLevelTerrainData()
                 overflow = "scroll",
                 children = {
                     UI.Label {
-                        text = exportText, fontSize = 11,
+                        text = exportJson, fontSize = 11,
                         fontColor = {180, 255, 180, 255},
                     },
                 },
@@ -1388,13 +1478,13 @@ function M.ExportLevelTerrainData()
                 children = {
                     UI.Button {
                         id = "export_copy_btn",
-                        text = "复制文本", fontSize = 13,
+                        text = "复制JSON", fontSize = 13,
                         width = 100, height = 32,
                         backgroundColor = {50, 120, 180, 220}, borderRadius = 6,
                         justifyContent = "center", alignItems = "center",
                         fontColor = {255,255,255,255},
                         onClick = function()
-                            ui:SetClipboardText(exportText)
+                            ui:SetClipboardText(exportJson)
                             local btn = levelEditor_.uiRoot:FindById("export_copy_btn")
                             if btn then btn:SetText("已复制!") end
                         end,
