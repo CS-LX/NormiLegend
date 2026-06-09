@@ -144,8 +144,23 @@ function M.Close()
 end
 
 function M._setEditorUIVisible(visible)
-    -- TitleMenu 已通过 NodeCanvas.IsActive() 自行管理 levelEditor_.uiRoot 的可见性
-    -- 此处不操作 UI.GetRoot()，否则会连带隐藏 Inspector 面板
+    local UI = require("urhox-libs/UI")
+    if not visible then
+        -- 保存当前编辑器 UI root 并替换为节点画布专用 root（空透明容器）
+        state.prevUIRoot = UI.GetRoot()
+        state.canvasUIRoot = UI.Panel {
+            width = "100%", height = "100%",
+            pointerEvents = "box-none",
+        }
+        UI.SetRoot(state.canvasUIRoot, false)
+    else
+        -- 恢复编辑器 UI root
+        if state.prevUIRoot then
+            UI.SetRoot(state.prevUIRoot, false)
+        end
+        state.prevUIRoot = nil
+        state.canvasUIRoot = nil
+    end
 end
 
 -- ============================================================================
@@ -246,10 +261,10 @@ function M._buildInspector(nodeId)
         children = children,
     }
 
-    -- 挂载到全局 UI 上层
-    local root = UI.GetRoot()
-    if root then
-        root:AddChild(state.inspectorRoot)
+    -- 挂载到节点画布专用 UI root
+    local canvasRoot = state.canvasUIRoot
+    if canvasRoot then
+        canvasRoot:AddChild(state.inspectorRoot)
     end
     state.inspectorNodeId = nodeId
 end
