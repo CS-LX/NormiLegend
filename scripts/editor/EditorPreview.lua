@@ -1333,15 +1333,22 @@ function P._executeStrategy(trigObj, executorObj, context)
             local label = ntDef and ntDef.label or act.nodeType
             local node = act.node or {}
             if act.nodeType == "set_var" then
-                table.insert(texts, label .. ":" .. (node.varName or "?") .. "=" .. tostring(node.varValue or 0))
+                table.insert(texts, label .. ":" .. (node.varName or "?") .. "=" .. tostring(node.newValue or 0))
             elseif act.nodeType == "spawn" then
-                table.insert(texts, label .. "(" .. (node.spawnType or "?") .. ")")
+                table.insert(texts, label .. "(" .. (node.spawnType or "?") .. " x" .. (node.spawnCount or 1) .. ")")
             elseif act.nodeType == "damage" then
-                table.insert(texts, label .. "(" .. tostring(node.amount or 0) .. ")")
+                local prefix = node.damageIsHeal and "+" or "-"
+                table.insert(texts, label .. "(" .. prefix .. tostring(node.damageAmount or 10) .. "HP)")
             elseif act.nodeType == "delay" then
-                table.insert(texts, label .. "(" .. tostring(node.seconds or 0) .. "s)")
+                table.insert(texts, label .. "(" .. tostring(node.delaySeconds or 1) .. "s)")
             elseif act.nodeType == "repeat_n" then
-                table.insert(texts, label .. "(" .. tostring(node.count or 1) .. "x)")
+                table.insert(texts, label .. "(" .. tostring(node.repeatCount or 3) .. "x)")
+            elseif act.nodeType == "dialog" then
+                local txt = node.dialogText or ""
+                if #txt > 8 then txt = txt:sub(1, 8) .. "…" end
+                table.insert(texts, label .. '("' .. txt .. '")')
+            elseif act.nodeType == "move_obj" then
+                table.insert(texts, label .. "(" .. (node.targetId or "?") .. " " .. (node.moveDuration or 1) .. "s)")
             else
                 table.insert(texts, label)
             end

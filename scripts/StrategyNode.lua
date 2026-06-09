@@ -1,25 +1,27 @@
 -- ============================================================================
 -- StrategyNode.lua - 节点化策略模式引擎
 -- 职责: 节点定义、端口系统、求值、序列化/反序列化
+-- 设计原则: OCP (开闭原则) - 新增节点只需在 NODE_TYPES/PORT_DEFS/INSPECTOR_FIELDS/Create/Evaluate 各加一条
 -- ============================================================================
 -- 节点类型 (针对2D横版动作关卡编辑器):
 --   event       : 事件入口 (常驻, 不可删除)
---   value       : 常量浮点数
+--   value       : 常量数值
+--   string      : 常量字符串
 --   param       : 引用运行时参数 (playerX, playerHP, time 等)
 --   compare     : 比较运算 (>, <, ==, !=, >=, <=)
 --   math        : 算术运算 (+, -, *, /, min, max, abs, clamp)
 --   logic       : 逻辑运算 (and, or, not)
+--   concat      : 字符串拼接
 --   branch      : 条件分支 (if condition then A else B)
 --   sequence    : 顺序执行多个子节点
 --   random      : 随机选择子节点执行 (加权)
 --   delay       : 延迟后继续执行
 --   repeat_n    : 重复 N 次
 --   spawn       : 生成实体 (敌人/道具/特效)
---   move_obj    : 移动对象 (平台/障碍物移动)
+--   move_obj    : 移动/旋转对象 (平台/障碍物变换)
 --   set_var     : 设置变量 (修改运行时参数)
 --   play_fx     : 播放效果 (音效/震屏/粒子/文字)
---   gate        : 门控 (开门/关门/切换阻挡)
---   teleport    : 传送玩家
+--   dialog      : 弹出对话框 (剧情/提示文字)
 --   damage      : 造成伤害/治疗
 --   win_level   : 过关/失败
 -- ============================================================================
@@ -32,42 +34,43 @@ local M = {}
 
 M.NODE_TYPES = {
     -- === 入口 ===
-    event      = { label = "事件入口",  color = {200, 50, 50},   category = "入口",   desc = "逻辑入口 (常驻)", icon = "▶" },
+    event      = { label = "事件入口",   color = {200, 50, 50},   category = "入口",   desc = "逻辑入口 (常驻)", icon = "▶" },
 
     -- === 数据 ===
-    value      = { label = "常量",     color = {110, 160, 200}, category = "数据",   desc = "固定数值", icon = "#" },
-    param      = { label = "读取变量", color = {200, 170, 50},  category = "数据",   desc = "读取运行时变量", icon = "$" },
+    value      = { label = "数值",      color = {110, 160, 200}, category = "数据",   desc = "固定数值常量", icon = "#" },
+    string     = { label = "字符串",    color = {180, 130, 200}, category = "数据",   desc = "固定文本常量", icon = "T" },
+    param      = { label = "读取变量",  color = {200, 170, 50},  category = "数据",   desc = "读取运行时变量", icon = "$" },
 
     -- === 条件 ===
-    compare    = { label = "比较",     color = {200, 110, 70},  category = "条件",   desc = "比较两个数值", icon = "?" },
-    logic      = { label = "逻辑",     color = {170, 90, 190},  category = "条件",   desc = "逻辑与/或/非", icon = "&" },
+    compare    = { label = "比较",      color = {200, 110, 70},  category = "条件",   desc = "比较两个数值", icon = "?" },
+    logic      = { label = "逻辑",      color = {170, 90, 190},  category = "条件",   desc = "逻辑与/或/非", icon = "&" },
 
     -- === 运算 ===
-    math       = { label = "数学",     color = {70, 170, 130},  category = "运算",   desc = "数学运算", icon = "+" },
+    math       = { label = "数学",      color = {70, 170, 130},  category = "运算",   desc = "数学运算", icon = "+" },
+    concat     = { label = "拼接",      color = {150, 140, 200}, category = "运算",   desc = "字符串拼接", icon = ".." },
 
     -- === 流程控制 ===
-    branch     = { label = "条件分支", color = {210, 150, 50},  category = "流程",   desc = "if/then/else", icon = "◇" },
-    sequence   = { label = "顺序执行", color = {90, 180, 90},   category = "流程",   desc = "按顺序执行", icon = "↓" },
-    random     = { label = "随机选择", color = {180, 100, 180}, category = "流程",   desc = "加权随机", icon = "?" },
-    delay      = { label = "延迟",     color = {130, 130, 180}, category = "流程",   desc = "延迟N秒后执行", icon = "⏱" },
-    repeat_n   = { label = "重复",     color = {150, 180, 90},  category = "流程",   desc = "重复N次", icon = "↺" },
+    branch     = { label = "条件分支",  color = {210, 150, 50},  category = "流程",   desc = "if/then/else", icon = "◇" },
+    sequence   = { label = "顺序执行",  color = {90, 180, 90},   category = "流程",   desc = "按顺序执行", icon = "↓" },
+    random     = { label = "随机选择",  color = {180, 100, 180}, category = "流程",   desc = "加权随机", icon = "?" },
+    delay      = { label = "延迟",      color = {130, 130, 180}, category = "流程",   desc = "延迟N秒后执行", icon = "⏱" },
+    repeat_n   = { label = "重复",      color = {150, 180, 90},  category = "流程",   desc = "重复N次", icon = "↺" },
 
     -- === 动作 (关卡核心) ===
-    spawn      = { label = "生成实体", color = {50, 170, 210},  category = "动作",   desc = "生成敌人/道具/特效", icon = "★" },
-    move_obj   = { label = "移动对象", color = {80, 200, 160},  category = "动作",   desc = "平移/旋转对象", icon = "→" },
-    set_var    = { label = "设置变量", color = {200, 180, 80},  category = "动作",   desc = "修改运行时参数", icon = "=" },
-    play_fx    = { label = "播放效果", color = {220, 130, 180}, category = "动作",   desc = "音效/震屏/粒子/提示", icon = "♪" },
-    gate       = { label = "门/开关",  color = {100, 140, 200}, category = "动作",   desc = "开门/关门/切换", icon = "⊞" },
-    teleport   = { label = "传送",     color = {160, 100, 220}, category = "动作",   desc = "传送玩家到指定位置", icon = "⊕" },
-    damage     = { label = "伤害/治疗",color = {220, 70, 70},   category = "动作",   desc = "对玩家造成伤害或治疗", icon = "♥" },
-    win_level  = { label = "胜负判定", color = {60, 200, 60},   category = "动作",   desc = "过关成功/失败", icon = "🏆" },
+    spawn      = { label = "生成实体",  color = {50, 170, 210},  category = "动作",   desc = "生成敌人/道具/特效", icon = "★" },
+    move_obj   = { label = "移动对象",  color = {80, 200, 160},  category = "动作",   desc = "平移/旋转对象", icon = "→" },
+    set_var    = { label = "设置变量",  color = {200, 180, 80},  category = "动作",   desc = "修改运行时参数", icon = "=" },
+    play_fx    = { label = "播放效果",  color = {220, 130, 180}, category = "动作",   desc = "音效/震屏/粒子/提示", icon = "♪" },
+    dialog     = { label = "弹出对话",  color = {100, 180, 220}, category = "动作",   desc = "显示剧情/提示文字", icon = "💬" },
+    damage     = { label = "伤害/治疗", color = {220, 70, 70},   category = "动作",   desc = "对玩家造成伤害或治疗", icon = "♥" },
+    win_level  = { label = "胜负判定",  color = {60, 200, 60},   category = "动作",   desc = "过关成功/失败", icon = "🏆" },
 }
 
 -- ============================================================================
 -- 端口定义
 -- ============================================================================
 
----@alias PortType "flow"|"number"|"boolean"
+---@alias PortType "flow"|"number"|"boolean"|"string"
 
 M.PORT_DEFS = {
     event = {
@@ -77,6 +80,10 @@ M.PORT_DEFS = {
     value = {
         inputs = {},
         outputs = { { name = "值", type = "number" } },
+    },
+    string = {
+        inputs = {},
+        outputs = { { name = "文本", type = "string" } },
     },
     param = {
         inputs = {},
@@ -93,6 +100,10 @@ M.PORT_DEFS = {
     logic = {
         inputs = { { name = "A", type = "boolean", field = "left" }, { name = "B", type = "boolean", field = "right" } },
         outputs = { { name = "结果", type = "boolean" } },
+    },
+    concat = {
+        inputs = { { name = "A", type = "string", field = "left" }, { name = "B", type = "string", field = "right" } },
+        outputs = { { name = "结果", type = "string" } },
     },
     branch = {
         inputs = { { name = "▶", type = "flow" }, { name = "条件", type = "boolean", field = "condition" } },
@@ -130,12 +141,8 @@ M.PORT_DEFS = {
         inputs = { { name = "▶", type = "flow" } },
         outputs = { { name = "▶", type = "flow", field = "outputNode" } },
     },
-    gate = {
-        inputs = { { name = "▶", type = "flow" } },
-        outputs = { { name = "▶", type = "flow", field = "outputNode" } },
-    },
-    teleport = {
-        inputs = { { name = "▶", type = "flow" }, { name = "X", type = "number", field = "targetX" }, { name = "Y", type = "number", field = "targetY" } },
+    dialog = {
+        inputs = { { name = "▶", type = "flow" }, { name = "内容", type = "string", field = "textInput" } },
         outputs = { { name = "▶", type = "flow", field = "outputNode" } },
     },
     damage = {
@@ -153,6 +160,7 @@ M.PORT_COLORS = {
     flow    = {240, 240, 240},
     number  = {100, 200, 140},
     boolean = {220, 140, 80},
+    string  = {180, 130, 220},
 }
 
 -- ============================================================================
@@ -202,6 +210,13 @@ M.SPAWN_TYPES = {
     { id = "projectile",     label = "投射物" },
 }
 
+-- 生成朝向
+M.SPAWN_DIRS = {
+    { id = "left",  label = "面朝左" },
+    { id = "right", label = "面朝右" },
+    { id = "auto",  label = "朝向玩家" },
+}
+
 -- 效果类型
 M.FX_TYPES = {
     { id = "sound",          label = "播放音效" },
@@ -212,12 +227,20 @@ M.FX_TYPES = {
     { id = "slow_motion",    label = "慢动作" },
 }
 
--- 门控动作类型
-M.GATE_ACTIONS = {
-    { id = "open",   label = "打开" },
-    { id = "close",  label = "关闭" },
-    { id = "toggle", label = "切换" },
-    { id = "remove", label = "移除障碍" },
+-- 对话类型
+M.DIALOG_STYLES = {
+    { id = "popup",      label = "居中弹窗" },
+    { id = "banner_top", label = "顶部横幅" },
+    { id = "subtitle",   label = "底部字幕" },
+    { id = "bubble",     label = "气泡对话" },
+}
+
+-- 移动缓动类型
+M.EASE_TYPES = {
+    { id = "linear",    label = "线性" },
+    { id = "easeIn",    label = "加速" },
+    { id = "easeOut",   label = "减速" },
+    { id = "easeInOut", label = "先加后减" },
 }
 
 -- 运行时可读参数
@@ -257,7 +280,7 @@ M.WIN_TYPES = {
 ---@field key string 节点上的字段名
 ---@field label string 显示名
 ---@field type InspectorFieldType
----@field options? table[] {id, label} 选项列表 (select类型)
+---@field options? table[]|string {id, label} 选项列表或 M 上的表名 (select类型)
 ---@field min? number
 ---@field max? number
 ---@field step? number
@@ -266,6 +289,9 @@ M.WIN_TYPES = {
 M.INSPECTOR_FIELDS = {
     value = {
         { key = "value", label = "数值", type = "float", min = -9999, max = 9999, step = 0.1, default = 0 },
+    },
+    string = {
+        { key = "strValue", label = "文本内容", type = "text", default = "" },
     },
     param = {
         { key = "paramName", label = "变量名", type = "select", options = "RUNTIME_PARAMS", default = "playerX" },
@@ -288,11 +314,13 @@ M.INSPECTOR_FIELDS = {
     spawn = {
         { key = "spawnType", label = "实体类型", type = "select", options = "SPAWN_TYPES", default = "enemy_melee" },
         { key = "spawnCount", label = "数量", type = "int", min = 1, max = 20, step = 1, default = 1 },
+        { key = "spawnDir", label = "朝向", type = "select", options = "SPAWN_DIRS", default = "auto" },
     },
     move_obj = {
-        { key = "targetId", label = "目标对象", type = "text", default = "" },
+        { key = "targetId", label = "目标ID", type = "text", default = "" },
         { key = "moveDuration", label = "持续(秒)", type = "float", min = 0.1, max = 30, step = 0.1, default = 1.0 },
-        { key = "moveEase", label = "缓动", type = "select", options = {{id="linear",label="线性"},{id="easeIn",label="加速"},{id="easeOut",label="减速"},{id="easeInOut",label="先加后减"}}, default = "easeOut" },
+        { key = "moveEase", label = "缓动", type = "select", options = "EASE_TYPES", default = "easeOut" },
+        { key = "rotationDeg", label = "旋转(度)", type = "float", min = -360, max = 360, step = 5, default = 0 },
     },
     set_var = {
         { key = "varName", label = "变量名", type = "select", options = "RUNTIME_PARAMS", default = "custom1" },
@@ -303,12 +331,11 @@ M.INSPECTOR_FIELDS = {
         { key = "fxParam", label = "参数", type = "text", default = "" },
         { key = "fxIntensity", label = "强度", type = "float", min = 0, max = 10, step = 0.1, default = 1.0 },
     },
-    gate = {
-        { key = "gateAction", label = "动作", type = "select", options = "GATE_ACTIONS", default = "open" },
-        { key = "gateTarget", label = "目标ID", type = "text", default = "" },
-    },
-    teleport = {
-        { key = "teleportRelative", label = "相对模式", type = "bool", default = false },
+    dialog = {
+        { key = "dialogText", label = "对话内容", type = "text", default = "你好！" },
+        { key = "dialogStyle", label = "样式", type = "select", options = "DIALOG_STYLES", default = "popup" },
+        { key = "dialogDuration", label = "显示时间(秒)", type = "float", min = 0.5, max = 30, step = 0.5, default = 3.0 },
+        { key = "dialogSpeaker", label = "说话人", type = "text", default = "" },
     },
     damage = {
         { key = "damageAmount", label = "数值", type = "float", min = -100, max = 100, step = 1, default = 10 },
@@ -320,10 +347,35 @@ M.INSPECTOR_FIELDS = {
 }
 
 -- ============================================================================
--- 节点创建
+-- 节点创建（工厂函数）
 -- ============================================================================
 
 local nextNodeId_ = 1
+
+-- 每种节点的默认字段（除 id/type/x/y 之外的字段）
+-- 用 table 驱动代替 if/elseif 链，符合 OCP
+local NODE_DEFAULTS = {
+    event     = { outputNode = nil },
+    value     = { value = 0.0 },
+    string    = { strValue = "" },
+    param     = { paramName = "playerX" },
+    compare   = { op = ">", left = nil, right = nil },
+    math      = { op = "+", left = nil, right = nil },
+    logic     = { op = "and", left = nil, right = nil },
+    concat    = { left = nil, right = nil, separator = "" },
+    branch    = { condition = nil, thenNode = nil, elseNode = nil },
+    sequence  = { children = {} },
+    random    = { children = {}, weights = {} },
+    delay     = { delaySeconds = 1.0, duration = nil, outputNode = nil },
+    repeat_n  = { repeatCount = 3, count = nil, bodyNode = nil, outputNode = nil },
+    spawn     = { spawnType = "enemy_melee", spawnCount = 1, spawnDir = "auto", spawnX = nil, spawnY = nil, outputNode = nil },
+    move_obj  = { targetId = "", moveDuration = 1.0, moveEase = "easeOut", rotationDeg = 0, offsetX = nil, offsetY = nil, outputNode = nil },
+    set_var   = { varName = "custom1", setMode = "set", newValue = nil, outputNode = nil },
+    play_fx   = { fxType = "sound", fxParam = "", fxIntensity = 1.0, outputNode = nil },
+    dialog    = { dialogText = "你好！", dialogStyle = "popup", dialogDuration = 3.0, dialogSpeaker = "", textInput = nil, outputNode = nil },
+    damage    = { damageAmount = 10, damageIsHeal = false, amount = nil, outputNode = nil },
+    win_level = { winType = "win" },
+}
 
 ---@param nodeType string
 ---@param config? table
@@ -338,99 +390,21 @@ function M.Create(nodeType, config)
     }
     nextNodeId_ = nextNodeId_ + 1
 
-    if nodeType == "event" then
-        node.outputNode = nil
-
-    elseif nodeType == "value" then
-        node.value = config.value or 0.0
-
-    elseif nodeType == "param" then
-        node.paramName = config.paramName or "playerX"
-
-    elseif nodeType == "compare" then
-        node.op = config.op or ">"
-        node.left = nil
-        node.right = nil
-
-    elseif nodeType == "math" then
-        node.op = config.op or "+"
-        node.left = nil
-        node.right = nil
-
-    elseif nodeType == "logic" then
-        node.op = config.op or "and"
-        node.left = nil
-        node.right = nil
-
-    elseif nodeType == "branch" then
-        node.condition = nil
-        node.thenNode = nil
-        node.elseNode = nil
-
-    elseif nodeType == "sequence" then
-        node.children = {}
-
-    elseif nodeType == "random" then
-        node.children = {}
-        node.weights = {}
-
-    elseif nodeType == "delay" then
-        node.delaySeconds = config.delaySeconds or 1.0
-        node.duration = nil  -- data port
-        node.outputNode = nil
-
-    elseif nodeType == "repeat_n" then
-        node.repeatCount = config.repeatCount or 3
-        node.count = nil  -- data port
-        node.bodyNode = nil
-        node.outputNode = nil
-
-    elseif nodeType == "spawn" then
-        node.spawnType = config.spawnType or "enemy_melee"
-        node.spawnCount = config.spawnCount or 1
-        node.spawnX = nil
-        node.spawnY = nil
-        node.outputNode = nil
-
-    elseif nodeType == "move_obj" then
-        node.targetId = config.targetId or ""
-        node.moveDuration = config.moveDuration or 1.0
-        node.moveEase = config.moveEase or "easeOut"
-        node.offsetX = nil
-        node.offsetY = nil
-        node.outputNode = nil
-
-    elseif nodeType == "set_var" then
-        node.varName = config.varName or "custom1"
-        node.setMode = config.setMode or "set"
-        node.newValue = nil
-        node.outputNode = nil
-
-    elseif nodeType == "play_fx" then
-        node.fxType = config.fxType or "sound"
-        node.fxParam = config.fxParam or ""
-        node.fxIntensity = config.fxIntensity or 1.0
-        node.outputNode = nil
-
-    elseif nodeType == "gate" then
-        node.gateAction = config.gateAction or "open"
-        node.gateTarget = config.gateTarget or ""
-        node.outputNode = nil
-
-    elseif nodeType == "teleport" then
-        node.teleportRelative = config.teleportRelative or false
-        node.targetX = nil
-        node.targetY = nil
-        node.outputNode = nil
-
-    elseif nodeType == "damage" then
-        node.damageAmount = config.damageAmount or 10
-        node.damageIsHeal = config.damageIsHeal or false
-        node.amount = nil
-        node.outputNode = nil
-
-    elseif nodeType == "win_level" then
-        node.winType = config.winType or "win"
+    -- 从默认表复制字段（深拷贝 table 类型）
+    local defaults = NODE_DEFAULTS[nodeType]
+    if defaults then
+        for k, v in pairs(defaults) do
+            if config[k] ~= nil then
+                node[k] = config[k]
+            elseif type(v) == "table" then
+                -- 深拷贝一层（children/weights 等数组）
+                local copy = {}
+                for ck, cv in pairs(v) do copy[ck] = cv end
+                node[k] = copy
+            else
+                node[k] = v
+            end
+        end
     end
 
     return node
@@ -466,12 +440,12 @@ function M.RemoveNode(tree, nodeId)
     if not node or node.type == "event" then return end
     tree.nodes[nodeId] = nil
     -- 清理所有引用
+    local skipKeys = { id = true, x = true, y = true, value = true, delaySeconds = true,
+        repeatCount = true, spawnCount = true, damageAmount = true, fxIntensity = true,
+        moveDuration = true, rotationDeg = true, dialogDuration = true }
     for _, n in pairs(tree.nodes) do
         for k, v in pairs(n) do
-            if type(v) == "number" and v == nodeId and k ~= "id" and k ~= "x" and k ~= "y"
-               and k ~= "value" and k ~= "delaySeconds" and k ~= "repeatCount"
-               and k ~= "spawnCount" and k ~= "damageAmount" and k ~= "fxIntensity"
-               and k ~= "moveDuration" then
+            if type(v) == "number" and v == nodeId and not skipKeys[k] then
                 n[k] = nil
             end
         end
@@ -595,7 +569,7 @@ function M.GetAllConnections(tree)
                     local srcOuts = M.GetOutputPorts(tree.nodes[srcId])
                     local srcIdx = 1
                     for si, sp in ipairs(srcOuts) do
-                        if sp.type == ip.type or sp.type == "number" or sp.type == "boolean" then
+                        if sp.type == ip.type or sp.type == "number" or sp.type == "boolean" or sp.type == "string" then
                             srcIdx = si; break
                         end
                     end
@@ -621,6 +595,8 @@ function M.Evaluate(tree, nodeId, context)
         return M.Evaluate(tree, node.outputNode, context)
     elseif t == "value" then
         return node.value
+    elseif t == "string" then
+        return node.strValue or ""
     elseif t == "param" then
         return (context.params or {})[node.paramName] or 0.0
     elseif t == "compare" then
@@ -657,6 +633,10 @@ function M.Evaluate(tree, nodeId, context)
         if op == "and" then return (l and r) and true or false
         elseif op == "or" then return (l or r) and true or false end
         return false
+    elseif t == "concat" then
+        local l = tostring(M.Evaluate(tree, node.left, context) or "")
+        local r = tostring(M.Evaluate(tree, node.right, context) or "")
+        return l .. (node.separator or "") .. r
     elseif t == "branch" then
         local cond = M.Evaluate(tree, node.condition, context)
         if cond then return M.Evaluate(tree, node.thenNode, context)
@@ -682,7 +662,7 @@ function M.Evaluate(tree, nodeId, context)
 
     -- 动作节点返回 action 描述
     if t == "spawn" or t == "move_obj" or t == "set_var" or t == "play_fx"
-       or t == "gate" or t == "teleport" or t == "damage" or t == "win_level"
+       or t == "dialog" or t == "damage" or t == "win_level"
        or t == "delay" or t == "repeat_n" then
         return { nodeType = t, node = node }
     end
@@ -729,7 +709,7 @@ function M._collectActions(tree, nodeId, context, actions)
         end
         M._collectActions(tree, children[#children], context, actions)
     elseif t == "delay" or t == "repeat_n" or t == "spawn" or t == "move_obj"
-        or t == "set_var" or t == "play_fx" or t == "gate" or t == "teleport"
+        or t == "set_var" or t == "play_fx" or t == "dialog"
         or t == "damage" or t == "win_level" then
         -- 动作节点: 收集自身，然后继续
         table.insert(actions, { nodeType = t, node = node })
@@ -751,7 +731,6 @@ function M.Serialize(tree)
     end
     for id, node in pairs(tree.nodes) do
         local sn = { id = id, type = node.type, x = node.x or 0, y = node.y or 0 }
-        -- 复制所有自定义字段
         for k, v in pairs(node) do
             if k ~= "id" and k ~= "type" and k ~= "x" and k ~= "y" then
                 sn[k] = v
@@ -778,6 +757,20 @@ function M.Deserialize(data)
         if node.type == "random" then
             if not node.children then node.children = {} end
             if not node.weights then node.weights = {} end
+        end
+        -- 兼容旧数据: gate → move_obj, teleport → move_obj
+        if node.type == "gate" then
+            node.type = "move_obj"
+            node.targetId = node.gateTarget or ""
+            node.moveDuration = 0.5
+            node.moveEase = "easeOut"
+            node.rotationDeg = 0
+        elseif node.type == "teleport" then
+            node.type = "move_obj"
+            node.targetId = "player"
+            node.moveDuration = 0
+            node.moveEase = "linear"
+            node.rotationDeg = 0
         end
         tree.nodes[node.id] = node
     end

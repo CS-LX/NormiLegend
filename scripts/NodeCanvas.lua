@@ -1,6 +1,7 @@
 -- ============================================================================
 -- NodeCanvas.lua - Blender/Unity 风格可视化节点编辑器
--- 使用 NanoVG 渲染, 支持拖拽节点、连接端口、平移缩放、Inspector 面板
+-- 使用 NanoVG 渲染, 支持拖拽节点、连接端口、平移缩放
+-- Inspector 面板使用 UI 组件（支持 TextBox 编辑）
 -- ============================================================================
 
 local S = require("GameState")
@@ -52,10 +53,12 @@ local state = {
     menuWorldX = 0,
     menuWorldY = 0,
 
-    -- Inspector
-    inspectorScrollY = 0,
-    editingField = nil,  -- {nodeId, key} 当前正在编辑的字段
-    editBuffer = "",
+    -- Inspector (UI 组件)
+    inspectorRoot = nil,
+    inspectorNodeId = nil,  -- 当前 inspector 正在展示的节点 id
+
+    -- Dropdown (节点类型快捷创建)
+    dropdownVisible = false,
 }
 
 -- ============================================================================
@@ -68,7 +71,7 @@ local NODE_PORT_H    = 24
 local NODE_PADDING   = 10
 local PORT_RADIUS    = 5.5
 local GRID_SIZE      = 50
-local INSPECTOR_W    = 340
+local INSPECTOR_W    = 280
 
 -- 颜色调色板
 local COL_BG         = {22, 22, 28, 252}
@@ -78,8 +81,6 @@ local COL_NODE_BORDER= {60, 60, 70, 200}
 local COL_SEL_BORDER = {255, 200, 60, 240}
 local COL_SHADOW     = {0, 0, 0, 60}
 local COL_TOOLBAR    = {30, 30, 38, 245}
-local COL_INSP_BG    = {32, 32, 40, 240}
-local COL_INSP_FIELD = {50, 50, 60, 220}
 local COL_MENU_BG    = {42, 42, 52, 248}
 local COL_MENU_HOVER = {70, 70, 95, 200}
 local COL_TEXT       = {220, 220, 230, 240}
@@ -94,7 +95,6 @@ function M.IsActive()
     return state.active
 end
 
---- 本帧是否刚通过 ESC 关闭（用于阻止外层 ESC 连锁触发）
 function M.JustClosed()
     return state.justClosed == true
 end
@@ -125,13 +125,14 @@ function M.Open(obj, fieldName, onClose)
     state.selectedNode = nil
     state.contextMenu = false
     state.connecting = false
-    state.editingField = nil
-    state.inspectorScrollY = 0
+    state.dropdownVisible = false
 
     M._setEditorUIVisible(false)
+    M._destroyInspector()
 end
 
 function M.Close()
+    M._destroyInspector()
     M._setEditorUIVisible(true)
     if state.onClose then state.onClose() end
     state.active = false
@@ -139,15 +140,252 @@ function M.Close()
     state.obj = nil
     state.contextMenu = false
     state.connecting = false
-    state.editingField = nil
+    state.dropdownVisible = false
 end
 
 function M._setEditorUIVisible(visible)
-    local UI = require("urhox-libs/UI")
-    local root = UI.GetRoot()
-    if root and root.SetVisible then
-        root:SetVisible(visible)
+    -- TitleMenu 已通过 NodeCanvas.IsActive() 自行管理 levelEditor_.uiRoot 的可见性
+    -- 此处不操作 UI.GetRoot()，否则会连带隐藏 Inspector 面板
+end
+
+-- ============================================================================
+-- Inspector UI 组件（实际可编辑面板）
+-- ============================================================================
+
+function M._destroyInspector()
+    if state.inspectorRoot then
+        state.inspectorRoot:Destroy()
+        state.inspectorRoot = nil
     end
+    state.inspectorNodeId = nil
+end
+
+function M._buildInspector(nodeId)
+    -- 如果已经在展示该节点则不重建
+    if state.inspectorNodeId == nodeId and state.inspectorRoot then return end
+    M._destroyInspector()
+
+    local node = state.tree and state.tree.nodes[nodeId]
+    if not node then return end
+
+    local UI = require("urhox-libs/UI")
+    local meta = SN.NODE_TYPES[node.type] or { label = "?", color = {128,128,128}, desc = "" }
+    local fields = SN.INSPECTOR_FIELDS[node.type]
+
+    local physW = graphics:GetWidth()
+    local dpr = graphics:GetDPR()
+    local logW = physW / dpr
+
+    local children = {}
+
+    -- 标题行
+    table.insert(children, UI.Label {
+        text = (meta.icon or "") .. " " .. meta.label,
+        fontSize = 14, fontColor = {meta.color[1], meta.color[2], meta.color[3], 255},
+        marginBottom = 2,
+    })
+    table.insert(children, UI.Label {
+        text = meta.desc or "", fontSize = 10, fontColor = {140, 140, 160, 200}, marginBottom = 8,
+    })
+
+    -- 分割线
+    table.insert(children, UI.Panel { width = "100%", height = 1, backgroundColor = {80, 80, 100, 100}, marginBottom = 8 })
+
+    if not fields or #fields == 0 then
+        table.insert(children, UI.Label { text = "该节点无可编辑属性", fontSize = 11, fontColor = {120,120,140,180} })
+    else
+        for _, field in ipairs(fields) do
+            -- 字段标签
+            table.insert(children, UI.Label {
+                text = field.label, fontSize = 10, fontColor = {180, 180, 200, 220}, marginBottom = 2,
+            })
+
+            -- 字段编辑器
+            local editor = M._createFieldEditor(node, field)
+            if editor then
+                table.insert(children, editor)
+            end
+
+            -- 间距
+            table.insert(children, UI.Panel { width = "100%", height = 6 })
+        end
+    end
+
+    -- 删除节点按钮（非 event）
+    if node.type ~= "event" then
+        table.insert(children, UI.Panel { width = "100%", height = 1, backgroundColor = {80, 50, 50, 100}, marginTop = 10, marginBottom = 6 })
+        table.insert(children, UI.Button {
+            text = "删除节点", fontSize = 11, width = "100%", height = 28,
+            backgroundColor = {120, 40, 40, 220}, borderRadius = 4,
+            fontColor = {255, 200, 200, 255}, justifyContent = "center", alignItems = "center",
+            onClick = function()
+                SN.RemoveNode(state.tree, nodeId)
+                state.selectedNode = nil
+                M._destroyInspector()
+            end,
+        })
+    end
+
+    -- 创建面板容器
+    local panelWidth = INSPECTOR_W / dpr
+    state.inspectorRoot = UI.Panel {
+        position = "absolute",
+        top = 40 / dpr,
+        right = 0,
+        width = panelWidth,
+        height = "100%",
+        backgroundColor = {32, 32, 40, 235},
+        borderLeftWidth = 1,
+        borderColor = {70, 70, 85, 200},
+        paddingTop = 12,
+        paddingBottom = 60,
+        paddingLeft = 12,
+        paddingRight = 12,
+        flexDirection = "column",
+        overflow = "scroll",
+        children = children,
+    }
+
+    -- 挂载到全局 UI 上层
+    local root = UI.GetRoot()
+    if root then
+        root:AddChild(state.inspectorRoot)
+    end
+    state.inspectorNodeId = nodeId
+end
+
+--- 创建单个字段的编辑器组件
+function M._createFieldEditor(node, field)
+    local UI = require("urhox-libs/UI")
+    local nodeRef = node  -- 闭包引用
+
+    if field.type == "float" or field.type == "int" then
+        local currentVal = node[field.key]
+        if currentVal == nil then currentVal = field.default or 0 end
+        if field.type == "int" then currentVal = math.floor(currentVal + 0.5) end
+
+        return UI.Panel {
+            flexDirection = "row", alignItems = "center", width = "100%", gap = 4,
+            children = {
+                -- 减按钮
+                UI.Button {
+                    text = "−", fontSize = 14, width = 28, height = 28,
+                    backgroundColor = {60, 60, 80, 220}, borderRadius = 4,
+                    fontColor = {150, 200, 255, 255}, justifyContent = "center", alignItems = "center",
+                    onClick = function()
+                        local step = field.step or 1
+                        local val = (nodeRef[field.key] or field.default or 0) - step
+                        val = math.max(field.min or -9999, val)
+                        if field.type == "int" then val = math.floor(val + 0.5) end
+                        nodeRef[field.key] = val
+                        -- 刷新 inspector
+                        state.inspectorNodeId = nil
+                        M._buildInspector(nodeRef.id)
+                    end,
+                },
+                -- 文本输入框
+                UI.TextField {
+                    value = field.type == "int" and tostring(math.floor(currentVal + 0.5)) or string.format("%.1f", currentVal),
+                    fontSize = 11, height = 28, flexGrow = 1,
+                    backgroundColor = {45, 45, 60, 255}, fontColor = {220, 230, 255, 255},
+                    borderRadius = 4, borderWidth = 1, borderColor = {80, 80, 100, 150},
+                    paddingHorizontal = 6, textAlign = "center",
+                    onSubmit = function(self, txt)
+                        local val = tonumber(txt)
+                        if val then
+                            val = math.max(field.min or -9999, math.min(field.max or 9999, val))
+                            if field.type == "int" then val = math.floor(val + 0.5) end
+                            nodeRef[field.key] = val
+                            state.inspectorNodeId = nil
+                            M._buildInspector(nodeRef.id)
+                        end
+                    end,
+                },
+                -- 加按钮
+                UI.Button {
+                    text = "+", fontSize = 14, width = 28, height = 28,
+                    backgroundColor = {60, 60, 80, 220}, borderRadius = 4,
+                    fontColor = {150, 200, 255, 255}, justifyContent = "center", alignItems = "center",
+                    onClick = function()
+                        local step = field.step or 1
+                        local val = (nodeRef[field.key] or field.default or 0) + step
+                        val = math.min(field.max or 9999, val)
+                        if field.type == "int" then val = math.floor(val + 0.5) end
+                        nodeRef[field.key] = val
+                        state.inspectorNodeId = nil
+                        M._buildInspector(nodeRef.id)
+                    end,
+                },
+            },
+        }
+
+    elseif field.type == "text" then
+        local currentVal = node[field.key]
+        if currentVal == nil then currentVal = field.default or "" end
+        return UI.TextField {
+            value = tostring(currentVal),
+            fontSize = 11, height = 28, width = "100%",
+            backgroundColor = {45, 45, 60, 255}, fontColor = {220, 220, 240, 255},
+            borderRadius = 4, borderWidth = 1, borderColor = {80, 80, 100, 150},
+            paddingHorizontal = 8,
+            placeholder = field.label,
+            onSubmit = function(self, txt)
+                nodeRef[field.key] = txt or ""
+            end,
+        }
+
+    elseif field.type == "select" then
+        local options = field.options
+        if type(options) == "string" then options = SN[options] end
+        if not options then return nil end
+
+        local currentVal = node[field.key]
+        if currentVal == nil then currentVal = field.default end
+
+        -- 构建选项列表
+        local optChildren = {}
+        for _, opt in ipairs(options) do
+            local isActive = (opt.id == currentVal)
+            table.insert(optChildren, UI.Button {
+                text = opt.label,
+                fontSize = 10, height = 24, width = "100%",
+                backgroundColor = isActive and {80, 100, 160, 220} or {50, 50, 65, 180},
+                borderRadius = 3,
+                fontColor = isActive and {255, 240, 150, 255} or {200, 200, 210, 220},
+                paddingLeft = 8, justifyContent = "center",
+                onClick = function()
+                    nodeRef[field.key] = opt.id
+                    state.inspectorNodeId = nil
+                    M._buildInspector(nodeRef.id)
+                end,
+            })
+        end
+
+        return UI.Panel {
+            width = "100%", flexDirection = "column", gap = 2,
+            maxHeight = 130, overflow = "scroll",
+            children = optChildren,
+        }
+
+    elseif field.type == "bool" then
+        local currentVal = node[field.key]
+        if currentVal == nil then currentVal = field.default or false end
+        return UI.Button {
+            text = currentVal and "✓ 是" or "✗ 否",
+            fontSize = 11, height = 28, width = "100%",
+            backgroundColor = currentVal and {50, 100, 50, 220} or {80, 50, 50, 220},
+            borderRadius = 4,
+            fontColor = currentVal and {150, 255, 150, 255} or {255, 150, 150, 255},
+            justifyContent = "center", alignItems = "center",
+            onClick = function()
+                nodeRef[field.key] = not nodeRef[field.key]
+                state.inspectorNodeId = nil
+                M._buildInspector(nodeRef.id)
+            end,
+        }
+    end
+
+    return nil
 end
 
 -- ============================================================================
@@ -167,12 +405,12 @@ end
 -- ============================================================================
 
 local function getNodeContentLines(node)
-    -- 额外显示行（节点参数摘要）
-    if node.type == "value" or node.type == "param" or node.type == "compare"
-       or node.type == "math" or node.type == "logic" then
+    if node.type == "value" or node.type == "string" or node.type == "param"
+       or node.type == "compare" or node.type == "math" or node.type == "logic"
+       or node.type == "concat" then
         return 1
     end
-    if node.type == "spawn" or node.type == "play_fx" or node.type == "gate"
+    if node.type == "spawn" or node.type == "play_fx" or node.type == "dialog"
        or node.type == "delay" or node.type == "repeat_n" or node.type == "win_level"
        or node.type == "set_var" or node.type == "damage" then
         return 1
@@ -248,13 +486,16 @@ end
 function M.HandleInput(dt)
     if not state.active then return end
 
-    -- 每帧开头清除"刚关闭"标志
     state.justClosed = false
 
-    -- ESC 关闭节点画布，返回编辑器界面
+    -- ESC 关闭
     if input:GetKeyPress(KEY_ESCAPE) then
-        state.justClosed = true
-        M.Close()
+        if state.contextMenu then
+            state.contextMenu = false
+        else
+            state.justClosed = true
+            M.Close()
+        end
         return
     end
 
@@ -262,49 +503,30 @@ function M.HandleInput(dt)
     local my = input.mousePosition.y
     local wx, wy = screenToWorld(mx, my)
 
-    -- Inspector 区域检测 (右侧面板内不进行画布操作)
+    -- Inspector 区域检测 (右侧 UI 面板)
     local physW = graphics:GetWidth()
-    local inInspector = state.selectedNode and mx > (physW - INSPECTOR_W)
+    local inInspector = state.selectedNode and state.inspectorRoot and mx > (physW - INSPECTOR_W)
 
-    -- 滚轮缩放 (指数缩放，平滑)
+    -- 滚轮缩放
     local wheel = input.mouseMoveWheel
     if wheel ~= 0 and not inInspector then
         local oldZoom = state.zoom
-        -- 指数缩放: 极缓速率，每格滚轮变化约 0.05%
         local factor = 1.0005
         local newZoom = state.zoom * (factor ^ wheel)
         state.zoom = math.max(0.2, math.min(4.0, newZoom))
-        -- 以鼠标位置为中心缩放
         local ratio = state.zoom / oldZoom
         state.panX = mx - (mx - state.panX) * ratio
         state.panY = my - (my - state.panY) * ratio
     end
 
-    -- Inspector 滚轮
-    if wheel ~= 0 and inInspector then
-        state.inspectorScrollY = state.inspectorScrollY - wheel * 20
-        state.inspectorScrollY = math.max(0, state.inspectorScrollY)
-    end
-
-    -- ESC 关闭
-    if input:GetKeyPress(KEY_ESCAPE) then
-        if state.editingField then
-            state.editingField = nil
-        elseif state.contextMenu then
-            state.contextMenu = false
-        else
-            M.Close()
-        end
-        return
-    end
-
     -- Delete 删除选中节点
     if input:GetKeyPress(KEY_DELETE) or input:GetKeyPress(KEY_BACKSPACE) then
-        if not state.editingField and state.selectedNode and state.tree.nodes[state.selectedNode] then
+        if state.selectedNode and state.tree.nodes[state.selectedNode] then
             local node = state.tree.nodes[state.selectedNode]
             if node.type ~= "event" then
                 SN.RemoveNode(state.tree, state.selectedNode)
                 state.selectedNode = nil
+                M._destroyInspector()
             end
         end
     end
@@ -325,9 +547,8 @@ function M.HandleInput(dt)
 
     -- 左键按下
     if input:GetMouseButtonPress(MOUSEB_LEFT) then
-        -- Inspector 面板内的点击
+        -- Inspector 面板内点击由 UI 组件处理，不再干预
         if inInspector then
-            M._handleInspectorClick(mx, my)
             return
         end
 
@@ -355,14 +576,13 @@ function M.HandleInput(dt)
         if hitId then
             state.selectedNode = hitId
             state.draggingNode = hitId
-            state.inspectorScrollY = 0
             local node = state.tree.nodes[hitId]
             state.dragOffsetX = wx - node.x
             state.dragOffsetY = wy - node.y
-            state.editingField = nil
+            M._buildInspector(hitId)
         else
             state.selectedNode = nil
-            state.editingField = nil
+            M._destroyInspector()
             state.panning = true
             state.panStartX = mx
             state.panStartY = my
@@ -444,75 +664,20 @@ function M._makeConnection(nodeA, portA, isOutputA, nodeB, portB, isOutputB)
 end
 
 -- ============================================================================
--- Inspector 面板点击处理
--- ============================================================================
-
-function M._handleInspectorClick(mx, my)
-    if not state.selectedNode then return end
-    local node = state.tree.nodes[state.selectedNode]
-    if not node then return end
-
-    local fields = SN.INSPECTOR_FIELDS[node.type]
-    if not fields then return end
-
-    local physW = graphics:GetWidth()
-    local panelX = physW - INSPECTOR_W
-    local panelY = 40
-    local startY = panelY + 84 - state.inspectorScrollY
-
-    for i, field in ipairs(fields) do
-        local fy = startY + (i - 1) * 88 + 32
-        local fieldX = panelX + 18
-        local fieldW = INSPECTOR_W - 36
-        local fieldH = 44
-
-        if mx >= fieldX and mx <= fieldX + fieldW and my >= fy and my <= fy + fieldH then
-            if field.type == "select" then
-                -- 循环切换选项
-                local options = field.options
-                if type(options) == "string" then options = SN[options] end
-                if options then
-                    local current = node[field.key]
-                    local nextIdx = 1
-                    for oi, opt in ipairs(options) do
-                        if opt.id == current then nextIdx = oi + 1; break end
-                    end
-                    if nextIdx > #options then nextIdx = 1 end
-                    node[field.key] = options[nextIdx].id
-                end
-            elseif field.type == "bool" then
-                node[field.key] = not node[field.key]
-            elseif field.type == "float" or field.type == "int" then
-                -- 左半部分减，右半部分加
-                local step = field.step or 1
-                local mid = fieldX + fieldW / 2
-                if mx < mid then
-                    node[field.key] = math.max(field.min or -9999, (node[field.key] or field.default or 0) - step)
-                else
-                    node[field.key] = math.min(field.max or 9999, (node[field.key] or field.default or 0) + step)
-                end
-                if field.type == "int" then node[field.key] = math.floor(node[field.key] + 0.5) end
-            end
-            return
-        end
-    end
-end
-
--- ============================================================================
--- 右键菜单 - 分类
+-- 右键菜单 - 分类（Dropdown 式）
 -- ============================================================================
 
 local MENU_CATEGORIES = {
-    { name = "数据",   types = { "value", "param" } },
+    { name = "数据",   types = { "value", "string", "param" } },
     { name = "条件",   types = { "compare", "logic" } },
-    { name = "运算",   types = { "math" } },
+    { name = "运算",   types = { "math", "concat" } },
     { name = "流程",   types = { "branch", "sequence", "random", "delay", "repeat_n" } },
-    { name = "动作",   types = { "spawn", "move_obj", "set_var", "play_fx", "gate", "teleport", "damage", "win_level" } },
+    { name = "动作",   types = { "spawn", "move_obj", "set_var", "play_fx", "dialog", "damage", "win_level" } },
 }
 
-local MENU_ITEM_H = 48
-local MENU_HEADER_H = 38
-local MENU_W = 260
+local MENU_ITEM_H = 36
+local MENU_HEADER_H = 28
+local MENU_W = 220
 
 local function getMenuTotalHeight()
     local h = 8
@@ -535,6 +700,7 @@ function M._handleContextMenuClick(mx, my)
                 local newNode = SN.Create(nodeType, { x = state.menuWorldX, y = state.menuWorldY })
                 SN.AddNode(state.tree, newNode)
                 state.selectedNode = newNode.id
+                M._buildInspector(newNode.id)
                 return true
             end
             curY = curY + MENU_ITEM_H
@@ -572,12 +738,7 @@ function M.Draw(vg, physW, physH)
         M._drawNode(vg, node, id == state.selectedNode)
     end
 
-    -- Inspector 面板 (在节点上层)
-    if state.selectedNode and state.tree.nodes[state.selectedNode] then
-        M._drawInspector(vg, physW, physH)
-    end
-
-    -- 右键菜单 (最上层)
+    -- 右键菜单 (最上层 NanoVG)
     if state.contextMenu then
         M._drawContextMenu(vg)
     end
@@ -619,7 +780,7 @@ function M._drawGrid(vg, physW, physH)
     end
     nvgStroke(vg)
 
-    -- 粗网格 (5格一组)
+    -- 粗网格
     local bigGrid = gridSize * 5
     if bigGrid > 40 then
         local bigAlpha = math.min(50, math.floor(bigGrid * 0.3))
@@ -645,7 +806,7 @@ function M._drawGrid(vg, physW, physH)
 end
 
 -- ============================================================================
--- 绘制: 节点 (美化版)
+-- 绘制: 节点
 -- ============================================================================
 
 function M._drawNode(vg, node, isSelected)
@@ -653,24 +814,24 @@ function M._drawNode(vg, node, isSelected)
     local sw = NODE_W * state.zoom
     local nh = getNodeHeight(node)
     local sh = nh * state.zoom
-    local rr = 8 * state.zoom  -- 圆角半径
+    local rr = 8 * state.zoom
 
     local meta = SN.NODE_TYPES[node.type] or { label = "?", color = {128, 128, 128}, icon = "?" }
     local r, g, b = meta.color[1], meta.color[2], meta.color[3]
 
-    -- 阴影 (柔和)
+    -- 阴影
     nvgBeginPath(vg)
     nvgRoundedRect(vg, sx + 2 * state.zoom, sy + 3 * state.zoom, sw, sh, rr)
     nvgFillColor(vg, nvgRGBA(COL_SHADOW[1], COL_SHADOW[2], COL_SHADOW[3], COL_SHADOW[4]))
     nvgFill(vg)
 
-    -- 主体 (深色)
+    -- 主体
     nvgBeginPath(vg)
     nvgRoundedRect(vg, sx, sy, sw, sh, rr)
     nvgFillColor(vg, nvgRGBA(COL_NODE_BODY[1], COL_NODE_BODY[2], COL_NODE_BODY[3], COL_NODE_BODY[4]))
     nvgFill(vg)
 
-    -- 选中/普通边框
+    -- 边框
     if isSelected then
         nvgStrokeColor(vg, nvgRGBA(COL_SEL_BORDER[1], COL_SEL_BORDER[2], COL_SEL_BORDER[3], COL_SEL_BORDER[4]))
         nvgStrokeWidth(vg, 2.5 * state.zoom)
@@ -680,13 +841,12 @@ function M._drawNode(vg, node, isSelected)
     end
     nvgStroke(vg)
 
-    -- 头部 (圆角矩形上半部分)
+    -- 头部渐变
     local headerH = NODE_HEADER_H * state.zoom
     nvgSave(vg)
     nvgIntersectScissor(vg, sx, sy, sw, headerH)
     nvgBeginPath(vg)
     nvgRoundedRect(vg, sx, sy, sw, sh, rr)
-    -- 渐变头部
     local headerPaint = nvgLinearGradient(vg, sx, sy, sx, sy + headerH,
         nvgRGBA(r, g, b, 200), nvgRGBA(math.floor(r * 0.7), math.floor(g * 0.7), math.floor(b * 0.7), 200))
     nvgFillPaint(vg, headerPaint)
@@ -701,7 +861,7 @@ function M._drawNode(vg, node, isSelected)
     nvgStrokeWidth(vg, 1)
     nvgStroke(vg)
 
-    -- 头部图标 + 标题
+    -- 头部文字
     nvgFontFace(vg, "sans")
     local iconSize = 14 * state.zoom
     local titleSize = 12 * state.zoom
@@ -714,10 +874,9 @@ function M._drawNode(vg, node, isSelected)
 
     nvgFontSize(vg, titleSize)
     nvgFillColor(vg, nvgRGBA(255, 255, 255, 240))
-    nvgTextAlign(vg, NVG_ALIGN_LEFT + NVG_ALIGN_MIDDLE)
     nvgText(vg, iconX + iconSize + 4 * state.zoom, headerCenterY, meta.label)
 
-    -- 节点参数摘要 (在端口下方显示一行关键参数)
+    -- 摘要行
     local extraLines = getNodeContentLines(node)
     if extraLines > 0 then
         local inPorts = SN.GetInputPorts(node)
@@ -745,7 +904,6 @@ function M._drawNode(vg, node, isSelected)
     local outPorts = SN.GetOutputPorts(node)
     for pi, port in ipairs(outPorts) do
         if port.isAdd then
-            -- "+" 按钮端口
             local px, py = getOutputPortPos(node, pi)
             local spx, spy = worldToScreen(px, py)
             nvgFontSize(vg, 12 * state.zoom)
@@ -760,13 +918,11 @@ function M._drawNode(vg, node, isSelected)
     end
 end
 
---- 绘制单个端口（美化版）
 function M._drawPort(vg, spx, spy, port, isOutput)
     local pr = PORT_RADIUS * state.zoom
     local pc = SN.PORT_COLORS[port.type] or {180, 180, 180}
 
     if port.type == "flow" then
-        -- Flow 端口: 三角形/菱形
         local s = pr * 1.2
         nvgBeginPath(vg)
         if isOutput then
@@ -785,7 +941,6 @@ function M._drawPort(vg, spx, spy, port, isOutput)
         nvgStrokeWidth(vg, 1.0 * state.zoom)
         nvgStroke(vg)
     else
-        -- 数据端口: 圆形
         nvgBeginPath(vg)
         nvgCircle(vg, spx, spy, pr)
         nvgFillColor(vg, nvgRGBA(pc[1], pc[2], pc[3], 220))
@@ -795,7 +950,7 @@ function M._drawPort(vg, spx, spy, port, isOutput)
         nvgStroke(vg)
     end
 
-    -- 端口名称
+    -- 端口名
     nvgFontFace(vg, "sans")
     nvgFontSize(vg, 10 * state.zoom)
     nvgFillColor(vg, nvgRGBA(COL_TEXT_DIM[1], COL_TEXT_DIM[2], COL_TEXT_DIM[3], COL_TEXT_DIM[4]))
@@ -808,10 +963,14 @@ function M._drawPort(vg, spx, spy, port, isOutput)
     end
 end
 
---- 获取节点参数摘要文字
 function M._getNodeSummary(node)
     local t = node.type
     if t == "value" then return tostring(node.value or 0) end
+    if t == "string" then
+        local s = node.strValue or ""
+        if #s > 12 then s = s:sub(1, 12) .. "…" end
+        return '"' .. s .. '"'
+    end
     if t == "param" then
         for _, p in ipairs(SN.RUNTIME_PARAMS) do
             if p.id == node.paramName then return "$" .. p.label end
@@ -827,6 +986,7 @@ function M._getNodeSummary(node)
         for _, o in ipairs(SN.LOGIC_OPS) do if o.id == node.op then return o.label end end
         return node.op or "and"
     end
+    if t == "concat" then return "A .. B" end
     if t == "spawn" then
         for _, s in ipairs(SN.SPAWN_TYPES) do if s.id == node.spawnType then return s.label end end
         return node.spawnType or ""
@@ -835,9 +995,10 @@ function M._getNodeSummary(node)
         for _, f in ipairs(SN.FX_TYPES) do if f.id == node.fxType then return f.label end end
         return node.fxType or ""
     end
-    if t == "gate" then
-        for _, g in ipairs(SN.GATE_ACTIONS) do if g.id == node.gateAction then return g.label end end
-        return node.gateAction or ""
+    if t == "dialog" then
+        local s = node.dialogText or ""
+        if #s > 10 then s = s:sub(1, 10) .. "…" end
+        return s
     end
     if t == "delay" then return string.format("%.1f秒", node.delaySeconds or 1) end
     if t == "repeat_n" then return string.format("%d次", node.repeatCount or 3) end
@@ -859,7 +1020,7 @@ function M._getNodeSummary(node)
 end
 
 -- ============================================================================
--- 绘制: 连线 (贝塞尔曲线)
+-- 绘制: 连线
 -- ============================================================================
 
 function M._drawConnections(vg)
@@ -890,10 +1051,6 @@ function M._drawBezier(vg, x1, y1, x2, y2, portType)
     nvgStroke(vg)
 end
 
--- ============================================================================
--- 绘制: 正在拖拽的连线
--- ============================================================================
-
 function M._drawConnectingLine(vg)
     local srcNode = state.tree.nodes[state.connSrcNodeId]
     if not srcNode then return end
@@ -915,139 +1072,7 @@ function M._drawConnectingLine(vg)
 end
 
 -- ============================================================================
--- 绘制: Inspector 面板
--- ============================================================================
-
-function M._drawInspector(vg, physW, physH)
-    local node = state.tree.nodes[state.selectedNode]
-    if not node then return end
-
-    local panelX = physW - INSPECTOR_W
-    local panelY = 40
-    local panelH = physH - 80
-
-    -- 面板背景
-    nvgBeginPath(vg)
-    nvgRect(vg, panelX, panelY, INSPECTOR_W, panelH)
-    nvgFillColor(vg, nvgRGBA(COL_INSP_BG[1], COL_INSP_BG[2], COL_INSP_BG[3], COL_INSP_BG[4]))
-    nvgFill(vg)
-    -- 左边框线
-    nvgBeginPath(vg)
-    nvgMoveTo(vg, panelX, panelY)
-    nvgLineTo(vg, panelX, panelY + panelH)
-    nvgStrokeColor(vg, nvgRGBA(70, 70, 85, 200))
-    nvgStrokeWidth(vg, 1)
-    nvgStroke(vg)
-
-    -- 节点类型标题
-    local meta = SN.NODE_TYPES[node.type] or { label = "?", color = {128,128,128}, icon = "?" }
-    nvgFontFace(vg, "sans")
-    nvgFontSize(vg, 30)
-    nvgFillColor(vg, nvgRGBA(meta.color[1], meta.color[2], meta.color[3], 240))
-    nvgTextAlign(vg, NVG_ALIGN_LEFT + NVG_ALIGN_TOP)
-    nvgText(vg, panelX + 18, panelY + 12, (meta.icon or "") .. " " .. meta.label)
-
-    -- 描述
-    nvgFontSize(vg, 20)
-    nvgFillColor(vg, nvgRGBA(COL_TEXT_HINT[1], COL_TEXT_HINT[2], COL_TEXT_HINT[3], COL_TEXT_HINT[4]))
-    nvgText(vg, panelX + 18, panelY + 48, meta.desc or "")
-
-    -- Inspector 字段
-    local fields = SN.INSPECTOR_FIELDS[node.type]
-    if not fields then
-        nvgFontSize(vg, 22)
-        nvgFillColor(vg, nvgRGBA(COL_TEXT_DIM[1], COL_TEXT_DIM[2], COL_TEXT_DIM[3], COL_TEXT_DIM[4]))
-        nvgText(vg, panelX + 18, panelY + 80, "该节点无可编辑属性")
-        return
-    end
-
-    -- 裁剪区域
-    nvgSave(vg)
-    nvgScissor(vg, panelX, panelY + 78, INSPECTOR_W, panelH - 84)
-
-    local startY = panelY + 84 - state.inspectorScrollY
-    local fieldSpacing = 88  -- 每个字段总高度
-    for i, field in ipairs(fields) do
-        local fy = startY + (i - 1) * fieldSpacing
-
-        -- 字段标签
-        nvgFontSize(vg, 21)
-        nvgFillColor(vg, nvgRGBA(COL_TEXT_DIM[1], COL_TEXT_DIM[2], COL_TEXT_DIM[3], COL_TEXT_DIM[4]))
-        nvgTextAlign(vg, NVG_ALIGN_LEFT + NVG_ALIGN_TOP)
-        nvgText(vg, panelX + 18, fy, field.label)
-
-        -- 字段值区域
-        local valY = fy + 32
-        local valX = panelX + 18
-        local valW = INSPECTOR_W - 36
-        local valH = 44
-
-        -- 背景框
-        nvgBeginPath(vg)
-        nvgRoundedRect(vg, valX, valY, valW, valH, 6)
-        nvgFillColor(vg, nvgRGBA(COL_INSP_FIELD[1], COL_INSP_FIELD[2], COL_INSP_FIELD[3], COL_INSP_FIELD[4]))
-        nvgFill(vg)
-        nvgStrokeColor(vg, nvgRGBA(70, 70, 85, 150))
-        nvgStrokeWidth(vg, 1)
-        nvgStroke(vg)
-
-        -- 值显示
-        local displayVal = M._getFieldDisplayValue(node, field)
-        nvgFontSize(vg, 22)
-        nvgFillColor(vg, nvgRGBA(COL_TEXT[1], COL_TEXT[2], COL_TEXT[3], COL_TEXT[4]))
-        nvgTextAlign(vg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
-        nvgText(vg, valX + valW / 2, valY + valH / 2, displayVal)
-
-        -- 数值类型显示 +/- 提示
-        if field.type == "float" or field.type == "int" then
-            nvgFontSize(vg, 26)
-            nvgFillColor(vg, nvgRGBA(120, 180, 255, 180))
-            nvgTextAlign(vg, NVG_ALIGN_LEFT + NVG_ALIGN_MIDDLE)
-            nvgText(vg, valX + 12, valY + valH / 2, "−")
-            nvgTextAlign(vg, NVG_ALIGN_RIGHT + NVG_ALIGN_MIDDLE)
-            nvgText(vg, valX + valW - 12, valY + valH / 2, "+")
-        end
-
-        -- select 类型右侧箭头
-        if field.type == "select" then
-            nvgFontSize(vg, 20)
-            nvgFillColor(vg, nvgRGBA(120, 180, 255, 180))
-            nvgTextAlign(vg, NVG_ALIGN_RIGHT + NVG_ALIGN_MIDDLE)
-            nvgText(vg, valX + valW - 10, valY + valH / 2, "▸")
-        end
-    end
-
-    nvgRestore(vg)
-end
-
---- 获取字段显示值
-function M._getFieldDisplayValue(node, field)
-    local val = node[field.key]
-    if val == nil then val = field.default end
-
-    if field.type == "select" then
-        local options = field.options
-        if type(options) == "string" then options = SN[options] end
-        if options then
-            for _, opt in ipairs(options) do
-                if opt.id == val then return opt.label end
-            end
-        end
-        return tostring(val or "")
-    elseif field.type == "bool" then
-        return val and "✓ 是" or "✗ 否"
-    elseif field.type == "float" then
-        return string.format("%.1f", val or 0)
-    elseif field.type == "int" then
-        return tostring(math.floor((val or 0) + 0.5))
-    elseif field.type == "text" then
-        return tostring(val or "")
-    end
-    return tostring(val or "")
-end
-
--- ============================================================================
--- 绘制: 右键菜单 (分类版)
+-- 绘制: 右键菜单
 -- ============================================================================
 
 function M._drawContextMenu(vg)
@@ -1077,17 +1102,17 @@ function M._drawContextMenu(vg)
 
     for _, cat in ipairs(MENU_CATEGORIES) do
         -- 分类标题
-        nvgFontSize(vg, 18)
+        nvgFontSize(vg, 13)
         nvgFillColor(vg, nvgRGBA(COL_TEXT_HINT[1], COL_TEXT_HINT[2], COL_TEXT_HINT[3], COL_TEXT_HINT[4]))
         nvgTextAlign(vg, NVG_ALIGN_LEFT + NVG_ALIGN_MIDDLE)
-        nvgText(vg, mx + 14, curY + MENU_HEADER_H / 2, "— " .. cat.name .. " —")
+        nvgText(vg, mx + 12, curY + MENU_HEADER_H / 2, "— " .. cat.name .. " —")
         curY = curY + MENU_HEADER_H
 
         for _, nodeType in ipairs(cat.types) do
             local hovered = curMx >= mx and curMx <= mx + MENU_W and curMy >= curY and curMy <= curY + MENU_ITEM_H
             if hovered then
                 nvgBeginPath(vg)
-                nvgRoundedRect(vg, mx + 4, curY + 2, MENU_W - 8, MENU_ITEM_H - 4, 5)
+                nvgRoundedRect(vg, mx + 4, curY + 2, MENU_W - 8, MENU_ITEM_H - 4, 4)
                 nvgFillColor(vg, nvgRGBA(COL_MENU_HOVER[1], COL_MENU_HOVER[2], COL_MENU_HOVER[3], COL_MENU_HOVER[4]))
                 nvgFill(vg)
             end
@@ -1095,14 +1120,14 @@ function M._drawContextMenu(vg)
             local nodeMeta = SN.NODE_TYPES[nodeType] or { label = "?", color = {128,128,128}, icon = "?" }
             -- 色点
             nvgBeginPath(vg)
-            nvgCircle(vg, mx + 22, curY + MENU_ITEM_H / 2, 7)
+            nvgCircle(vg, mx + 20, curY + MENU_ITEM_H / 2, 5)
             nvgFillColor(vg, nvgRGBA(nodeMeta.color[1], nodeMeta.color[2], nodeMeta.color[3], 220))
             nvgFill(vg)
             -- 文字
-            nvgFontSize(vg, 22)
+            nvgFontSize(vg, 14)
             nvgFillColor(vg, nvgRGBA(COL_TEXT[1], COL_TEXT[2], COL_TEXT[3], COL_TEXT[4]))
             nvgTextAlign(vg, NVG_ALIGN_LEFT + NVG_ALIGN_MIDDLE)
-            nvgText(vg, mx + 40, curY + MENU_ITEM_H / 2, nodeMeta.label)
+            nvgText(vg, mx + 34, curY + MENU_ITEM_H / 2, nodeMeta.label)
 
             curY = curY + MENU_ITEM_H
         end
@@ -1120,7 +1145,6 @@ function M._drawToolbar(vg, physW)
     nvgRect(vg, 0, 0, physW, barH)
     nvgFillColor(vg, nvgRGBA(COL_TOOLBAR[1], COL_TOOLBAR[2], COL_TOOLBAR[3], COL_TOOLBAR[4]))
     nvgFill(vg)
-    -- 底部描边
     nvgBeginPath(vg)
     nvgMoveTo(vg, 0, barH)
     nvgLineTo(vg, physW, barH)
@@ -1128,7 +1152,6 @@ function M._drawToolbar(vg, physW)
     nvgStrokeWidth(vg, 1)
     nvgStroke(vg)
 
-    -- 标题
     nvgFontFace(vg, "sans")
     nvgFontSize(vg, 15)
     nvgFillColor(vg, nvgRGBA(240, 200, 60, 240))
@@ -1141,13 +1164,23 @@ function M._drawToolbar(vg, physW)
     end
     nvgText(vg, 14, barH / 2, title)
 
-    -- 缩放信息
+    -- 缩放
     nvgFontSize(vg, 12)
     nvgFillColor(vg, nvgRGBA(COL_TEXT_DIM[1], COL_TEXT_DIM[2], COL_TEXT_DIM[3], COL_TEXT_DIM[4]))
     nvgTextAlign(vg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
     nvgText(vg, physW / 2, barH / 2, string.format("%.0f%%", state.zoom * 100))
 
-    -- 关闭按钮
+    -- 节点数
+    local nodeCount = 0
+    if state.tree then
+        for _ in pairs(state.tree.nodes) do nodeCount = nodeCount + 1 end
+    end
+    nvgFontSize(vg, 11)
+    nvgFillColor(vg, nvgRGBA(COL_TEXT_HINT[1], COL_TEXT_HINT[2], COL_TEXT_HINT[3], COL_TEXT_HINT[4]))
+    nvgTextAlign(vg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
+    nvgText(vg, physW / 2, barH / 2 + 14, nodeCount .. " nodes")
+
+    -- 关闭提示
     nvgFontSize(vg, 12)
     nvgFillColor(vg, nvgRGBA(200, 200, 210, 200))
     nvgTextAlign(vg, NVG_ALIGN_RIGHT + NVG_ALIGN_MIDDLE)
