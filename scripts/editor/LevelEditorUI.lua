@@ -108,6 +108,12 @@ function M.BuildLevelEditorUI()
         children = { UI.Label { text = "导出", fontSize = 13, fontColor = {255, 255, 255, 255} } },
         onClick = function() getTitleMenu().ExportLevelTerrainData() end,
     })
+    toolbar:AddChild(UI.Button {
+        paddingLeft = 12, paddingRight = 12, paddingTop = 6, paddingBottom = 6,
+        backgroundColor = {140, 90, 40, 220}, borderRadius = 6,
+        children = { UI.Label { text = "导入", fontSize = 13, fontColor = {255, 255, 255, 255} } },
+        onClick = function() getTitleMenu().ImportLevelData() end,
+    })
 
     -- 画布区域（侧视图网格，自适应填满左侧区域）
     local canvasW = levelEditor_.canvasW

@@ -236,16 +236,22 @@ function M.EnterLevelEditor(chapterIdx, levelIdx)
     levelEditor_.selectedObj = nil
     levelEditor_.currentTool = "platform"
 
-    -- 初始化关卡物件（如果已有数据则加载）
+    -- 初始化关卡物件（优先从 JSON 导入，其次用内存缓存，最后用默认数据）
     local key = chapterIdx .. "_" .. levelIdx
+    local jsonPath = "levels/" .. key .. ".json"
     if not levelEditor_.objects[key] then
-        -- 第一章 第1-1关 地形数据
-        levelEditor_.objects[key] = {
-            { type = "ground", x = -0.5, y = 12.5, w = 23.0, h = 3.0, name = "地面" },
-            { type = "platform", x = 5.0, y = 9.0, w = 4.0, h = 0.5, name = "平台1" },
-            { type = "platform", x = 12.0, y = 7.5, w = 3.0, h = 0.5, name = "平台2" },
-            { type = "platform", x = 11.0, y = 10.5, w = 3.0, h = 0.5, name = "platform5" },
-        }
+        if fileSystem:FileExists(jsonPath) then
+            -- 从已导出的 JSON 文件还原完整状态
+            M.ImportLevelData(jsonPath)
+        else
+            -- 默认地形数据（第一章 第1-1关）
+            levelEditor_.objects[key] = {
+                { type = "ground", x = -0.5, y = 12.5, w = 23.0, h = 3.0, name = "地面" },
+                { type = "platform", x = 5.0, y = 9.0, w = 4.0, h = 0.5, name = "平台1" },
+                { type = "platform", x = 12.0, y = 7.5, w = 3.0, h = 0.5, name = "平台2" },
+                { type = "platform", x = 11.0, y = 10.5, w = 3.0, h = 0.5, name = "platform5" },
+            }
+        end
     end
 
     -- 导入默认素材（仅首次）
@@ -1524,6 +1530,165 @@ function M.ExportLevelTerrainData()
         },
     }
     levelEditor_.uiRoot:AddChild(exportOverlay)
+end
+
+--- 从 JSON 文件导入关卡完整数据，还原编辑器状态
+--- @param filePath string|nil 文件路径（默认 "levels/{ch}_{lv}.json"）
+--- @return boolean success 是否成功
+function M.ImportLevelData(filePath)
+    local ch = levelEditor_.chapterIdx
+    local lv = levelEditor_.levelIdx
+    local key = ch .. "_" .. lv
+    filePath = filePath or ("levels/" .. key .. ".json")
+
+    -- 读取文件
+    if not fileSystem:FileExists(filePath) then
+        print("[LEVEL IMPORT] 文件不存在: " .. filePath)
+        return false
+    end
+    local file = File(filePath, FILE_READ)
+    if not file:IsOpen() then
+        print("[LEVEL IMPORT] 无法打开文件: " .. filePath)
+        return false
+    end
+    local jsonStr = file:ReadString()
+    file:Close()
+
+    -- 解析 JSON
+    local ok, data = pcall(cjson.decode, jsonStr)
+    if not ok or type(data) ~= "table" then
+        print("[LEVEL IMPORT] JSON 解析失败: " .. filePath)
+        return false
+    end
+
+    print("[LEVEL IMPORT] 开始导入 " .. filePath .. " (version=" .. tostring(data.version) .. ")")
+
+    -- 还原世界尺寸
+    if data.worldW then levelEditor_.worldW = data.worldW end
+    if data.worldH then levelEditor_.worldH = data.worldH end
+
+    -- 还原镜头范围
+    if data.cameraBounds then
+        levelEditor_.cameraBoundsEnabled = data.cameraBounds.enabled ~= false
+        levelEditor_.cameraBounds.x = data.cameraBounds.x or 2
+        levelEditor_.cameraBounds.y = data.cameraBounds.y or 1
+        levelEditor_.cameraBounds.w = data.cameraBounds.w or 26
+        levelEditor_.cameraBounds.h = data.cameraBounds.h or 15.5
+    end
+
+    -- 还原物件列表
+    if data.objects then
+        local objects = {}
+        for _, o in ipairs(data.objects) do
+            local obj = {
+                type = o.type or "platform",
+                x = o.x or 0,
+                y = o.y or 0,
+                w = o.w or 1,
+                h = o.h or 1,
+                name = o.name or "",
+            }
+            -- 颜色
+            if o.color then
+                obj.color = o.color
+            end
+            -- 贴图层
+            if o.texLayers and #o.texLayers > 0 then
+                obj.texLayers = {}
+                for _, tl in ipairs(o.texLayers) do
+                    table.insert(obj.texLayers, {
+                        path = tl.path,
+                        name = tl.name,
+                        opacity = tl.opacity or 1.0,
+                        scaleW = tl.scaleW or 1.0,
+                        scaleH = tl.scaleH or 1.0,
+                        visible = tl.visible ~= false,
+                        lockAspect = tl.lockAspect or false,
+                    })
+                end
+            end
+            -- 触发器字段
+            if obj.type == "trigger" then
+                obj.triggerMethod = o.triggerMethod or "none"
+                obj.triggerMethodDesc = o.triggerMethodDesc or ""
+                obj.mappings = o.mappings or {}
+                if o.triggerStrategy then
+                    local SN = require("StrategyNode")
+                    obj.triggerStrategy = SN.Deserialize(o.triggerStrategy)
+                end
+            end
+            -- 执行器字段
+            if obj.type == "executor" then
+                obj.executorEffect = o.executorEffect or "none"
+                obj.executorEffectDesc = o.executorEffectDesc or ""
+                if o.executorStrategy then
+                    local SN = require("StrategyNode")
+                    obj.executorStrategy = SN.Deserialize(o.executorStrategy)
+                end
+            end
+            table.insert(objects, obj)
+        end
+        levelEditor_.objects[key] = objects
+    end
+
+    -- 还原背景图层
+    if data.bgLayers then
+        levelEditor_.bgLayers = {}
+        for _, bg in ipairs(data.bgLayers) do
+            table.insert(levelEditor_.bgLayers, {
+                path = bg.path,
+                name = bg.name,
+                opacity = bg.opacity or 1.0,
+                x = bg.x or 0,
+                y = bg.y or 0,
+                w = bg.w or 10,
+                h = bg.h or 10,
+                depth = bg.depth or 0,
+                visible = bg.visible ~= false,
+                lockAspect = bg.lockAspect or false,
+            })
+        end
+        levelEditor_.selectedBgLayer = nil
+    end
+
+    -- 还原自定义贴图素材库
+    if data.customTextures then
+        levelEditor_.customTextures = {}
+        for _, tex in ipairs(data.customTextures) do
+            table.insert(levelEditor_.customTextures, {
+                path = tex.path,
+                name = tex.name,
+                cat = tex.cat or "misc",
+            })
+        end
+    end
+
+    -- 还原关卡元数据
+    if data.levelMeta then
+        local chapterLevels = MenuFlow.levelData_ and MenuFlow.levelData_[ch]
+        if chapterLevels and chapterLevels[lv] then
+            local ld = chapterLevels[lv]
+            if data.levelMeta.name then ld.name = data.levelMeta.name end
+            if data.levelMeta.difficulty then ld.difficulty = data.levelMeta.difficulty end
+            if data.levelMeta.enemies then ld.enemies = data.levelMeta.enemies end
+            if data.levelMeta.timeLimit then ld.timeLimit = data.levelMeta.timeLimit end
+            if data.levelMeta.reward then ld.reward = data.levelMeta.reward end
+            if data.levelMeta.description then ld.description = data.levelMeta.description end
+        end
+    end
+
+    -- 重置 UI 瞬态
+    levelEditor_.selectedObj = nil
+    levelEditor_.selectedBgLayer = nil
+
+    -- 刷新编辑器 UI
+    if levelEditor_.active and levelEditor_.uiRoot then
+        M.BuildLevelEditorUI()
+    end
+
+    print("[LEVEL IMPORT] 导入完成: " .. key .. " (" .. #(levelEditor_.objects[key] or {}) .. " objects, "
+        .. #(levelEditor_.bgLayers or {}) .. " bgLayers)")
+    return true
 end
 
 --- 获取关卡数据（供外部模块访问）
