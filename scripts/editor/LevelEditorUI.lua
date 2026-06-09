@@ -18,7 +18,6 @@ end
 
 -- 状态别名
 local levelEditor_ = EditorState.state
-local levelData_ = MenuFlow.levelData_
 local CHAPTER_DATA = MenuFlow.CHAPTER_DATA
 local EDITOR_TOOLS = EditorState.TOOLS
 
@@ -55,7 +54,7 @@ function M.BuildLevelEditorUI()
     local ch = levelEditor_.chapterIdx
     local lv = levelEditor_.levelIdx
     local chapName = CHAPTER_DATA[ch] and CHAPTER_DATA[ch].name or ("第" .. ch .. "章")
-    local lvName = levelData_[ch][lv].name
+    local lvName = MenuFlow.levelData_[ch][lv].name
 
     -- 顶部工具栏
     local toolbar = UI.Panel {
