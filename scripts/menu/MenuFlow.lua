@@ -32,6 +32,14 @@ local layerEditorPanel_ = nil
 local layerEditorToggle_ = nil
 local layerEditorExport_ = nil
 
+-- 角色面板图层编辑器状态
+local charPanelLayers_ = nil       -- 角色面板图层定义数组
+local charPanelContainer_ = nil    -- 角色面板图层容器
+local charLayerEditorVisible_ = false
+local charLayerEditorPanel_ = nil
+local charLayerEditorToggle_ = nil
+local charPanelTime_ = 0           -- 角色面板动画时间
+
 -- ============================================================================
 -- 关卡数据（共享给 TitleMenu 中的 LevelSelect/LevelEditor）
 -- ============================================================================
@@ -458,16 +466,20 @@ end
 -- 主菜单功能面板（任务/角色）
 -- ============================================================================
 
---- 显示功能面板（半透明占位）
+--- 显示功能面板
 ---@param panelType "task"|"character"
 function M.ShowMenuPanel(panelType)
-    -- 如果已有面板打开，先关闭
     if menuPanelOverlay_ then
         M.CloseMenuPanel()
     end
 
-    local title = panelType == "task" and "任务" or "角色"
+    if panelType == "character" then
+        M.ShowCharacterPanel()
+        return
+    end
 
+    -- 任务面板仍为占位
+    local title = "任务"
     menuPanelOverlay_ = UI.Panel {
         id = "menu_panel_overlay",
         position = "absolute", top = 0, left = 0,
@@ -506,6 +518,17 @@ function M.CloseMenuPanel()
         menuPanelOverlay_:Destroy()
         menuPanelOverlay_ = nil
     end
+    -- 关闭角色面板图层编辑器
+    if charLayerEditorPanel_ then
+        charLayerEditorPanel_:Destroy()
+        charLayerEditorPanel_ = nil
+    end
+    if charLayerEditorToggle_ then
+        charLayerEditorToggle_:Destroy()
+        charLayerEditorToggle_ = nil
+    end
+    charPanelContainer_ = nil
+    charLayerEditorVisible_ = false
 end
 
 --- 主菜单面板是否打开
@@ -859,6 +882,13 @@ end
 -- ============================================================================
 function M.UpdateMainMenuAnimation(dt)
     if not S.showMainMenu then return end
+
+    -- 子面板打开时：只运行角色面板视差，跳过主界面背景视差
+    if menuPanelOverlay_ then
+        M.UpdateCharPanelParallax(dt)
+        return
+    end
+
     if not S.mainMenuUIRoot or not S.mainMenuUIRoot.menuPanel then return end
 
     mainMenuTime_ = mainMenuTime_ + dt
@@ -1330,6 +1360,369 @@ function M.ShowLayerEditorExport()
         },
     }
     S.mainMenuUIRoot:AddChild(layerEditorExport_)
+end
+
+-- ============================================================================
+-- 角色面板图层系统 + 图层编辑器
+-- ============================================================================
+
+--- 初始化角色面板图层定义（视觉从下到上：底图→背景→...→占位文本）
+local function initCharPanelLayers()
+    -- 渲染顺序：数组第1个在最底层，最后一个在最顶层
+    charPanelLayers_ = {
+        { name = "底图(参考)", id = "cp_底图",         file = "image/角色1面板ui/底图.png",         top = 0, left = 0, opacity = 0.5, isRef = true, hidden = true },
+        { name = "背景",       id = "cp_背景",         file = "image/角色1面板ui/背景.png",         top = 0, left = 0, opacity = 1.0 },
+        { name = "加粗边框",   id = "cp_加粗边框",     file = "image/角色1面板ui/加粗边框.png",     top = 0, left = 0, opacity = 1.0 },
+        { name = "圆形头像线稿", id = "cp_圆形头像线稿", file = "image/角色1面板ui/圆形头像线稿.png", top = 0, left = 0, opacity = 1.0 },
+        { name = "半透明文本框", id = "cp_半透明文本框", file = "image/角色1面板ui/半透明文本框.png", top = 0, left = 0, opacity = 1.0 },
+        { name = "走姿小人",   id = "cp_走姿小人",     file = "image/角色1面板ui/走姿小人.png",     top = 0, left = 0, opacity = 1.0 },
+        { name = "角色头像",   id = "cp_角色头像",     file = "image/角色1面板ui/角色头像+左下花.png", top = 0, left = 0, opacity = 1.0 },
+        { name = "头像框飞鸟", id = "cp_头像框飞鸟",   file = "image/角色1面板ui/头像框飞鸟.png",   top = 0, left = 0, opacity = 1.0 },
+        { name = "头像框花",   id = "cp_头像框花",     file = "image/角色1面板ui/头像框花.png",     top = 0, left = 0, opacity = 1.0 },
+        { name = "边框飞鸟",   id = "cp_边框飞鸟",     file = "image/角色1面板ui/边框飞鸟.png",     top = 0, left = 0, opacity = 1.0 },
+        { name = "占位文本",   id = "cp_占位文本",     file = "image/角色1面板ui/占位文本.png",     top = 0, left = 0, opacity = 1.0 },
+    }
+end
+
+--- 打开角色面板（显示图层 + 编辑器）
+function M.ShowCharacterPanel()
+    if not charPanelLayers_ then
+        initCharPanelLayers()
+    end
+
+    -- 全屏遮罩 + 图层容器
+    charPanelContainer_ = UI.Panel {
+        id = "cp_layer_container",
+        position = "absolute", top = 0, left = 0,
+        width = 1840, height = 1035,
+    }
+
+    menuPanelOverlay_ = UI.Panel {
+        id = "menu_panel_overlay",
+        position = "absolute", top = 0, left = 0,
+        width = "100%", height = "100%",
+        backgroundColor = {0, 0, 0, 0},
+        justifyContent = "center", alignItems = "center",
+        children = { charPanelContainer_ },
+    }
+    S.mainMenuUIRoot:AddChild(menuPanelOverlay_)
+
+    -- 按顺序添加图层
+    M.RebuildCharPanelLayers()
+
+    -- 构建角色面板图层编辑器
+    M.BuildCharLayerEditor()
+end
+
+--- 重建角色面板图层渲染顺序
+function M.RebuildCharPanelLayers()
+    if not charPanelContainer_ then return end
+    charPanelContainer_:ClearChildren()
+
+    for _, layer in ipairs(charPanelLayers_) do
+        if not layer.hidden then
+            local panel = UI.Panel {
+                id = layer.id,
+                position = "absolute",
+                top = layer.top, left = layer.left,
+                width = 1840, height = 1035,
+                backgroundImage = layer.file,
+                backgroundFit = "contain",
+                pointerEvents = "none",
+                opacity = layer.opacity or 1.0,
+            }
+            charPanelContainer_:AddChild(panel)
+        end
+    end
+end
+
+--- 应用角色面板某图层的位置
+function M.ApplyCharLayerPos(idx)
+    if not charPanelContainer_ then return end
+    local layer = charPanelLayers_[idx]
+    local widget = charPanelContainer_:FindById(layer.id)
+    if widget then
+        widget:SetStyle({ top = layer.top, left = layer.left })
+    end
+end
+
+--- 构建角色面板图层编辑器
+function M.BuildCharLayerEditor()
+    -- 切换按钮
+    charLayerEditorToggle_ = UI.Button {
+        position = "absolute", bottom = 16, right = 16,
+        text = "角色图层编辑", fontSize = 12,
+        fontColor = {255, 255, 255, 220},
+        backgroundColor = {80, 40, 120, 200},
+        borderRadius = 4,
+        paddingLeft = 8, paddingRight = 8,
+        paddingTop = 4, paddingBottom = 4,
+        onClick = function()
+            charLayerEditorVisible_ = not charLayerEditorVisible_
+            M.RefreshCharLayerEditor()
+        end,
+    }
+    S.mainMenuUIRoot:AddChild(charLayerEditorToggle_)
+
+    -- 编辑面板
+    charLayerEditorPanel_ = UI.Panel {
+        id = "charLayerEditorPanel",
+        position = "absolute", bottom = 50, right = 16,
+        width = 380, maxHeight = "85%",
+        backgroundColor = {0, 0, 0, 220},
+        borderRadius = 8,
+        paddingTop = 10, paddingBottom = 10,
+        paddingLeft = 10, paddingRight = 10,
+        flexDirection = "column", gap = 4,
+        overflow = "scroll",
+        display = "none",
+    }
+    S.mainMenuUIRoot:AddChild(charLayerEditorPanel_)
+
+    -- 默认展开编辑器
+    charLayerEditorVisible_ = true
+    M.RefreshCharLayerEditor()
+end
+
+--- 刷新角色面板图层编辑器内容
+function M.RefreshCharLayerEditor()
+    if not charLayerEditorPanel_ then return end
+    charLayerEditorPanel_:ClearChildren()
+
+    if not charLayerEditorVisible_ then
+        charLayerEditorPanel_:SetStyle({ display = "none" })
+        return
+    end
+    charLayerEditorPanel_:SetStyle({ display = "flex" })
+
+    -- 标题行
+    charLayerEditorPanel_:AddChild(UI.Panel {
+        flexDirection = "row", alignItems = "center", justifyContent = "space-between", width = "100%",
+        children = {
+            UI.Label {
+                text = "◆ 角色面板图层（从下到上）", fontSize = 13,
+                fontColor = {200, 150, 255, 255},
+            },
+            UI.Button {
+                text = "✕ 关闭面板", fontSize = 11,
+                paddingLeft = 8, paddingRight = 8, paddingTop = 3, paddingBottom = 3,
+                backgroundColor = {150, 50, 50, 200}, borderRadius = 4,
+                fontColor = {255, 255, 255, 255},
+                onClick = function() M.CloseMenuPanel() end,
+            },
+        },
+    })
+
+    -- 图层行
+    for i, layer in ipairs(charPanelLayers_) do
+        charLayerEditorPanel_:AddChild(M.CreateCharLayerRow(i, layer))
+    end
+
+    -- 导出按钮
+    charLayerEditorPanel_:AddChild(UI.Button {
+        text = "导出位置数据", fontSize = 12, marginTop = 8,
+        width = "100%", height = 28,
+        backgroundColor = {80, 60, 160, 220}, borderRadius = 4,
+        justifyContent = "center", alignItems = "center",
+        fontColor = {255, 255, 255, 255},
+        onClick = function() M.ShowCharLayerExport() end,
+    })
+end
+
+--- 创建角色面板图层编辑行
+function M.CreateCharLayerRow(i, layer)
+    local isRef = layer.isRef or false
+    local nameColor = isRef and {255, 180, 100, 200} or {220, 200, 255, 255}
+
+    local row = UI.Panel {
+        flexDirection = "row", alignItems = "center", gap = 2, width = "100%",
+        backgroundColor = isRef and {60, 40, 20, 100} or {0, 0, 0, 0},
+        paddingTop = 2, paddingBottom = 2, paddingLeft = 4, paddingRight = 2,
+        borderRadius = 3,
+    }
+
+    -- 图层名称
+    row:AddChild(UI.Label { text = layer.name, fontSize = 10, fontColor = nameColor, width = 62 })
+
+    -- top 控制
+    row:AddChild(UI.Label { text = "T:", fontSize = 9, fontColor = {150, 150, 150, 255}, width = 12 })
+    row:AddChild(UI.Button {
+        text = "-", fontSize = 11, width = 18, height = 18,
+        backgroundColor = {80, 80, 120, 200}, borderRadius = 2,
+        justifyContent = "center", alignItems = "center", fontColor = {255, 255, 255, 255},
+        onClick = function()
+            charPanelLayers_[i].top = charPanelLayers_[i].top - 5
+            M.ApplyCharLayerPos(i)
+            M.RefreshCharLayerEditor()
+        end,
+    })
+    row:AddChild(UI.Label { text = tostring(math.floor(layer.top)), fontSize = 9, fontColor = {255, 255, 255, 255}, width = 30, textAlign = "center" })
+    row:AddChild(UI.Button {
+        text = "+", fontSize = 11, width = 18, height = 18,
+        backgroundColor = {80, 80, 120, 200}, borderRadius = 2,
+        justifyContent = "center", alignItems = "center", fontColor = {255, 255, 255, 255},
+        onClick = function()
+            charPanelLayers_[i].top = charPanelLayers_[i].top + 5
+            M.ApplyCharLayerPos(i)
+            M.RefreshCharLayerEditor()
+        end,
+    })
+
+    -- left 控制
+    row:AddChild(UI.Label { text = "L:", fontSize = 9, fontColor = {150, 150, 150, 255}, width = 12 })
+    row:AddChild(UI.Button {
+        text = "-", fontSize = 11, width = 18, height = 18,
+        backgroundColor = {80, 120, 80, 200}, borderRadius = 2,
+        justifyContent = "center", alignItems = "center", fontColor = {255, 255, 255, 255},
+        onClick = function()
+            charPanelLayers_[i].left = charPanelLayers_[i].left - 5
+            M.ApplyCharLayerPos(i)
+            M.RefreshCharLayerEditor()
+        end,
+    })
+    row:AddChild(UI.Label { text = tostring(math.floor(layer.left)), fontSize = 9, fontColor = {255, 255, 255, 255}, width = 30, textAlign = "center" })
+    row:AddChild(UI.Button {
+        text = "+", fontSize = 11, width = 18, height = 18,
+        backgroundColor = {80, 120, 80, 200}, borderRadius = 2,
+        justifyContent = "center", alignItems = "center", fontColor = {255, 255, 255, 255},
+        onClick = function()
+            charPanelLayers_[i].left = charPanelLayers_[i].left + 5
+            M.ApplyCharLayerPos(i)
+            M.RefreshCharLayerEditor()
+        end,
+    })
+
+    -- 图层上移
+    row:AddChild(UI.Button {
+        text = "▲", fontSize = 9, width = 20, height = 18,
+        backgroundColor = (i > 1) and {120, 80, 150, 200} or {60, 60, 60, 100}, borderRadius = 2,
+        justifyContent = "center", alignItems = "center",
+        fontColor = (i > 1) and {255, 255, 255, 255} or {100, 100, 100, 255},
+        onClick = function()
+            if i > 1 then M.MoveCharLayer(i, -1) end
+        end,
+    })
+    -- 图层下移
+    row:AddChild(UI.Button {
+        text = "▼", fontSize = 9, width = 20, height = 18,
+        backgroundColor = (i < #charPanelLayers_) and {120, 80, 150, 200} or {60, 60, 60, 100}, borderRadius = 2,
+        justifyContent = "center", alignItems = "center",
+        fontColor = (i < #charPanelLayers_) and {255, 255, 255, 255} or {100, 100, 100, 255},
+        onClick = function()
+            if i < #charPanelLayers_ then M.MoveCharLayer(i, 1) end
+        end,
+    })
+
+    return row
+end
+
+--- 移动角色面板图层顺序
+function M.MoveCharLayer(idx, direction)
+    local target = idx + direction
+    if target < 1 or target > #charPanelLayers_ then return end
+    charPanelLayers_[idx], charPanelLayers_[target] = charPanelLayers_[target], charPanelLayers_[idx]
+    M.RebuildCharPanelLayers()
+    M.RefreshCharLayerEditor()
+end
+
+--- 角色面板视差动画更新（每帧调用）
+function M.UpdateCharPanelParallax(dt)
+    if not charPanelContainer_ or not charPanelLayers_ then return end
+
+    charPanelTime_ = charPanelTime_ + dt
+    local t = charPanelTime_
+
+    -- 鼠标归一化坐标 (-1 ~ 1)
+    local screenW = graphics:GetWidth()
+    local screenH = graphics:GetHeight()
+    local mx = input.mousePosition.x
+    local my = input.mousePosition.y
+    local nx = (mx - screenW * 0.5) / (screenW * 0.5)
+    local ny = (my - screenH * 0.5) / (screenH * 0.5)
+
+    local layerCount = #charPanelLayers_
+    local visibleIdx = 0
+
+    for idx, layer in ipairs(charPanelLayers_) do
+        if not layer.hidden then
+            visibleIdx = visibleIdx + 1
+            local widget = charPanelContainer_:FindById(layer.id)
+            if widget then
+                -- 静态层：不做视差和呼吸
+                local isStatic = (layer.id == "cp_背景" or layer.id == "cp_占位文本"
+                    or layer.id == "cp_加粗边框" or layer.id == "cp_圆形头像线稿"
+                    or layer.id == "cp_半透明文本框")
+
+                if isStatic then
+                    widget:SetStyle({
+                        top = layer.top,
+                        left = layer.left,
+                    })
+                else
+                    -- 深度因子：底层=0.1, 顶层=1.0（越靠上视差越强）
+                    local depth = 0.1 + 0.9 * ((visibleIdx - 1) / math.max(layerCount - 2, 1))
+
+                    -- 水平视差（底层~3px, 顶层~25px）
+                    local parX = -nx * 25 * depth
+                    -- 垂直视差（底层~1px, 顶层~8px）
+                    local parY = -ny * 8 * depth
+
+                    -- 呼吸浮动：每层不同相位
+                    local breathPhase = idx * 0.8
+                    local breathAmp = 2 + depth * 4  -- 底层~2px, 顶层~6px
+                    -- 特定图层呼吸幅度加大
+                    if layer.id == "cp_头像框飞鸟" then
+                        breathAmp = 16
+                    elseif layer.id == "cp_走姿小人" then
+                        breathAmp = 12
+                    end
+                    local breathOffset = math.sin(t * 0.7 + breathPhase) * breathAmp
+
+                    widget:SetStyle({
+                        top = layer.top + parY + breathOffset,
+                        left = layer.left + parX,
+                    })
+                end
+            end
+        end
+    end
+end
+
+--- 导出角色面板图层位置数据
+function M.ShowCharLayerExport()
+    local lines = { "-- 角色面板图层位置（从下到上）--" }
+    for i, layer in ipairs(charPanelLayers_) do
+        local tag = layer.isRef and " [参考]" or ""
+        table.insert(lines, i .. ". " .. layer.name .. tag .. ": top=" .. tostring(math.floor(layer.top)) .. ", left=" .. tostring(math.floor(layer.left)))
+    end
+    local exportText = table.concat(lines, "\n")
+    print("[CharPanel] 导出数据:\n" .. exportText)
+
+    -- 弹窗展示
+    local exportPanel = UI.Panel {
+        position = "absolute", top = "10%", left = "20%",
+        width = "60%",
+        backgroundColor = {0, 0, 0, 230},
+        borderRadius = 10, borderWidth = 1, borderColor = {120, 80, 200, 150},
+        paddingTop = 16, paddingBottom = 16,
+        paddingLeft = 16, paddingRight = 16,
+        flexDirection = "column", gap = 8,
+        children = {
+            UI.Label { text = "角色面板图层位置数据", fontSize = 16, fontColor = {200, 160, 255, 255} },
+            UI.Label { text = exportText, fontSize = 11, fontColor = {200, 200, 200, 255} },
+            UI.Button {
+                text = "关闭", fontSize = 13,
+                width = 80, height = 30,
+                backgroundColor = {100, 50, 50, 200}, borderRadius = 4,
+                justifyContent = "center", alignItems = "center",
+                fontColor = {255, 255, 255, 255},
+                onClick = function()
+                    exportPanel:Destroy()
+                end,
+            },
+        },
+    }
+    S.mainMenuUIRoot:AddChild(exportPanel)
 end
 
 return M
