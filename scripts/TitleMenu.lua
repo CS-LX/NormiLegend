@@ -1,12 +1,15 @@
 -- ============================================================================
 -- TitleMenu.lua
--- 标题画面、主菜单（Live2D视差）、图层编辑器、过渡系统
+-- 关卡选择 + 关卡编辑器核心控制器（CRUD/Undo/Update）
+-- 菜单/过场/章节/图层编辑 → menu/MenuFlow.lua
+-- 编辑器UI构建 → editor/LevelEditorUI.lua
+-- 预览系统 → editor/EditorPreview.lua
+-- 画布渲染 → editor/EditorRenderer.lua
+-- 全局状态 → editor/EditorState.lua
 -- ============================================================================
 local S = require("GameState")
 local C = require("GameConfig")
 local UI = require("urhox-libs/UI")
-local Animation = require("Animation")
-local Combat = require("Combat")
 local NodeCanvas = require("NodeCanvas")
 local EditorState = require("editor.EditorState")
 
