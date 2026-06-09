@@ -1321,6 +1321,7 @@ function M.ExportLevelTerrainData()
                     scaleW = layer.scaleW,
                     scaleH = layer.scaleH,
                     visible = layer.visible,
+                    lockAspect = layer.lockAspect or false,
                 })
             end
         end
@@ -1373,6 +1374,7 @@ function M.ExportLevelTerrainData()
                 h = bg.h,
                 depth = bg.depth,
                 visible = bg.visible,
+                lockAspect = bg.lockAspect or false,
             })
         end
     end
@@ -1389,6 +1391,21 @@ function M.ExportLevelTerrainData()
         end
     end
 
+    -- 序列化关卡元数据（行为规则）
+    local levelMeta = nil
+    local chapterLevelData = MenuFlow.levelData_ and MenuFlow.levelData_[ch]
+    if chapterLevelData and chapterLevelData[lv] then
+        local ld = chapterLevelData[lv]
+        levelMeta = {
+            name = ld.name,
+            difficulty = ld.difficulty,
+            enemies = ld.enemies,
+            timeLimit = ld.timeLimit,
+            reward = ld.reward,
+            description = ld.description or "",
+        }
+    end
+
     -- 组装完整导出数据
     local exportData = {
         version = 1,
@@ -1397,6 +1414,8 @@ function M.ExportLevelTerrainData()
         key = key,
         chapterName = chapName,
         levelName = lvName,
+        -- 关卡行为元数据
+        levelMeta = levelMeta,
         -- 世界尺寸参数
         worldW = levelEditor_.worldW,
         worldH = levelEditor_.worldH,
