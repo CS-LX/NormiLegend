@@ -1328,14 +1328,20 @@ function P._executeStrategy(trigObj, executorObj, context)
     -- 3. 生成文本摘要
     if #results > 0 then
         local texts = {}
-        local actionLabels = {}
-        for _, a in ipairs(SN.ACTION_TYPES) do actionLabels[a.id] = a.label end
         for _, act in ipairs(results) do
-            local label = actionLabels[act.actionType] or act.actionType
-            if act.actionType == "set_param" then
-                table.insert(texts, label .. ":" .. act.actionParam .. "=" .. act.actionValue)
-            elseif act.actionValue ~= 0 then
-                table.insert(texts, label .. "(" .. act.actionValue .. ")")
+            local ntDef = SN.NODE_TYPES[act.nodeType]
+            local label = ntDef and ntDef.label or act.nodeType
+            local node = act.node or {}
+            if act.nodeType == "set_var" then
+                table.insert(texts, label .. ":" .. (node.varName or "?") .. "=" .. tostring(node.varValue or 0))
+            elseif act.nodeType == "spawn" then
+                table.insert(texts, label .. "(" .. (node.spawnType or "?") .. ")")
+            elseif act.nodeType == "damage" then
+                table.insert(texts, label .. "(" .. tostring(node.amount or 0) .. ")")
+            elseif act.nodeType == "delay" then
+                table.insert(texts, label .. "(" .. tostring(node.seconds or 0) .. "s)")
+            elseif act.nodeType == "repeat_n" then
+                table.insert(texts, label .. "(" .. tostring(node.count or 1) .. "x)")
             else
                 table.insert(texts, label)
             end

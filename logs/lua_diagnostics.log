@@ -1,5 +1,5 @@
-Lua Diagnostics | Errors: 0 | Warnings: 1460 | EmmyLua Types: /workspace/.emmylua
-Info: 0 | Hints: 79 | Total: 1539 | Time: 2026-06-09 10:57:36 | Dir: /workspace/scripts
+Lua Diagnostics | Errors: 0 | Warnings: 1464 | EmmyLua Types: /workspace/.emmylua
+Info: 0 | Hints: 79 | Total: 1543 | Time: 2026-06-09 11:27:05 | Dir: /workspace/scripts
 ---
 WARN  | Animation.lua:17:8 | Impossible `if` statement: this condition is always falsy [unnecessary-if]
 WARN  | Animation.lua:26:8 | Impossible `if` statement: this condition is always falsy [unnecessary-if]
@@ -1243,7 +1243,6 @@ WARN  | EditorPreview.lua:1303:12 | Unnecessary `if` statement: this condition i
 WARN  | EditorPreview.lua:1319:12 | Unnecessary `if` statement: this condition is always truthy [unnecessary-if]
 WARN  | EditorPreview.lua:605:31 | Cannot call expression of type `never`. [call-non-callable]
 WARN  | EditorPreview.lua:642:27 | Cannot call expression of type `never`. [call-non-callable]
-WARN  | EditorPreview.lua:932:85 | expected `number` but found `never`. [param-type-mismatch]
 WARN  | EditorPreview.lua:1206:26 | expected `integer` but found `number`. [param-type-mismatch]
 WARN  | EditorPreview.lua:1243:30 | expected `integer` but found `number`. [param-type-mismatch]
 WARN  | EditorPreview.lua:1264:22 | expected `integer` but found `number`. [param-type-mismatch]
@@ -1258,7 +1257,6 @@ WARN  | EditorPreview.lua:919:28 | layer may be nil [need-check-nil]
 WARN  | EditorPreview.lua:920:28 | layer may be nil [need-check-nil]
 WARN  | EditorPreview.lua:921:28 | layer may be nil [need-check-nil]
 WARN  | EditorPreview.lua:922:28 | layer may be nil [need-check-nil]
-WARN  | EditorPreview.lua:1332:31 | Undefined field `ACTION_TYPES`. [undefined-field]
 WARN  | EditorPreview.lua:1087:27 | Undefined field `cols`. [undefined-field]
 WARN  | EditorPreview.lua:1088:27 | Undefined field `rows`. [undefined-field]
 WARN  | EditorPreview.lua:112:17 | Cannot assign `number` to `integer`. [assign-type-mismatch]
@@ -1271,6 +1269,12 @@ WARN  | EditorPreview.lua:463:9 | Cannot assign `number` to `integer`. [assign-t
 WARN  | EditorPreview.lua:474:13 | Cannot assign `number` to `integer`. [assign-type-mismatch]
 WARN  | EditorPreview.lua:479:9 | Cannot assign `number` to `integer`. [assign-type-mismatch]
 WARN  | EditorPreview.lua:673:5 | Cannot assign `(unknown|false)` to `boolean`. [assign-type-mismatch]
+WARN  | EditorPreview.lua:917:23 | Cannot assign `never` to `number`. [assign-type-mismatch]
+WARN  | EditorPreview.lua:918:23 | Cannot assign `never` to `integer`. [assign-type-mismatch]
+WARN  | EditorPreview.lua:919:23 | Cannot assign `never` to `integer`. [assign-type-mismatch]
+WARN  | EditorPreview.lua:920:23 | Cannot assign `never` to `integer`. [assign-type-mismatch]
+WARN  | EditorPreview.lua:921:23 | Cannot assign `never` to `integer`. [assign-type-mismatch]
+WARN  | EditorPreview.lua:922:23 | Cannot assign `never` to `integer`. [assign-type-mismatch]
 WARN  | EditorPreview.lua:1076:9 | Cannot assign `(0|1|2|3|10|11...)?` to `integer`. [assign-type-mismatch]
 WARN  | EditorRenderer.lua:27:8 | Unnecessary `if` statement: this condition is always truthy [unnecessary-if]
 WARN  | EditorRenderer.lua:28:8 | Impossible `if` statement: this condition is always falsy [unnecessary-if]
