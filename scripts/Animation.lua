@@ -80,8 +80,13 @@ function M.Update(dt, velX)
             -- 从蹲下/蹲走切到其他动画时重置
             S.animFrame = 0
             S.animTimer = 0.0
+        elseif S.currentAnim == C.ANIM_JUMP and S.currentCharacter == 3 and not S.activeJump then
+            -- 角色3被动离地（坠落）：跳过起跳帧，直接进入滞空循环（1索引第4帧=0索引3）
+            S.animFrame = 3
+            S.animTimer = 0.0
         else
             S.animFrame = 0
+            S.jumpLoopIdx = 0
             S.animTimer = 0.0
         end
     end
@@ -89,7 +94,7 @@ function M.Update(dt, velX)
     -- 根据动画类型选择帧率
     local fps = C.ANIM_FPS
     if S.currentAnim == C.ANIM_RUN then
-        fps = C.ANIM_FPS_RUN
+        fps = (S.currentCharacter == 3) and 10 or C.ANIM_FPS_RUN
     elseif S.currentAnim == C.ANIM_ATTACK then
         fps = C.ANIM_FPS_ATTACK
     elseif S.currentAnim == C.ANIM_BLOCK then
@@ -169,6 +174,14 @@ function M.Update(dt, velX)
         elseif S.currentAnim == C.ANIM_CROUCH_WALK then
             -- 蹲走动画：交替播放
             S.animFrame = S.animFrame % 2
+        elseif S.currentAnim == C.ANIM_JUMP and S.currentCharacter == 3 then
+            -- 角色3跳跃动画：0-2 起跳（1索引1-3，顺序播放一次），3-7 滞空循环（1索引4-8）
+            if S.animFrame > 7 then
+                S.animFrame = 3
+            end
+        elseif S.currentAnim == C.ANIM_JUMP then
+            -- 其他角色跳跃动画：正常循环
+            S.animFrame = S.animFrame % C.SPRITE_FRAMES
         else
             -- 其他动画循环
             S.animFrame = S.animFrame % C.SPRITE_FRAMES

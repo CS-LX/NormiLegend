@@ -29,6 +29,7 @@ function M.RefreshCharSwitchPanel()
     local charList = {
         { idx = 1, name = "冰法师", avatar = "image/avatar_char1_20260602072030.png", border = { 100, 180, 255, 220 } },
         { idx = 2, name = "角娘", avatar = "image/avatar_char2_20260602072055.png", border = { 255, 100, 100, 220 } },
+        { idx = 3, name = "蓝白", avatar = "image/char3_idle_12f.png", border = { 130, 200, 255, 220 } },
     }
 
     for _, info in ipairs(charList) do
@@ -51,7 +52,7 @@ function M.RefreshCharSwitchPanel()
 end
 
 --- 切换到指定角色
----@param charIdx number 1=冰法师, 2=黑红角娘
+---@param charIdx number 1=冰法师, 2=黑红角娘, 3=蓝白角色
 function M.SwitchToCharacter(charIdx)
     if S.currentCharacter == charIdx then return end
     -- 保存当前角色状态
@@ -160,6 +161,7 @@ function M.HandlePhysicsBeginContact(eventType, eventData)
     if IsGroundOrPlatform(hitNode) then
         S.groundContactCount = S.groundContactCount + 1
         S.onGround = true
+        S.activeJump = false
         -- 落地时结束滞空
         if S.isHanging and S.playerBody then
             S.isHanging = false
@@ -192,6 +194,9 @@ end
 function M.Update(dt)
     if S.playerBody == nil then return end
 
+    -- 确保刚体始终处于唤醒状态（防止 Box2D 自动休眠导致重力/移动失效）
+    S.playerBody.awake = true
+
     -- 光翼破碎动画计时
     if S.wingShatterTimer > 0 then
         S.wingShatterTimer = S.wingShatterTimer - dt
@@ -222,10 +227,11 @@ function M.Update(dt)
         end
     end
 
-    -- 数字键切换角色（1=冰法师, 2=黑红角娘）
+    -- 数字键切换角色（1=冰法师, 2=黑红角娘, 3=蓝白角色）
     if not S.editorMode then
         if input:GetKeyPress(KEY_1) then M.SwitchToCharacter(1) end
         if input:GetKeyPress(KEY_2) then M.SwitchToCharacter(2) end
+        if input:GetKeyPress(KEY_3) then M.SwitchToCharacter(3) end
     end
 
     -- 输入处理
@@ -279,6 +285,7 @@ function M.Update(dt)
     if S.onGround and jumpPressed and not S.isCharging and not S.chargeReleased and math.abs(S.playerBody.linearVelocity.y) < 2.0 then
         S.onGround = false
         S.groundContactCount = 0
+        S.activeJump = true
         S.playerBody.linearVelocity = Vector2(desiredVelX, C.PLAYER_JUMP_SPEED)
         S.playerBody.awake = true
         S.isHanging = false

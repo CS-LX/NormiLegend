@@ -46,6 +46,19 @@ function M.LoadSpriteSheets()
     S.img2Burst = nvgCreateImage(vg, "image/char2_qburst_12f_v2_20260531082012.png", flags)
     S.img2Block = nvgCreateImage(vg, "image/char2_block_12f_20260531085931.png", flags)
 
+    -- 角色3（蓝白角色）序列帧
+    S.img3Idle = nvgCreateImage(vg, "image/char3_idle_12f.png", flags)
+    S.img3Run = nvgCreateImage(vg, "image/char3_run_12f.png", flags)
+    S.img3Jump = nvgCreateImage(vg, "image/char3_jump_12f.png", flags)
+    -- 角色3其他动画预留（暂用idle替代）
+    S.img3Attack = S.img3Idle
+    S.img3Block = S.img3Idle
+    S.img3Charge = S.img3Idle
+    S.img3Heal = S.img3Idle
+    S.img3Crouch = S.img3Idle
+    S.img3CrouchWalk = S.img3Idle
+    S.img3Hit = S.img3Idle
+
     -- 角色头像
     S.imgAvatar1 = nvgCreateImage(vg, "image/avatar_char1_20260602072030.png", 0)
     S.imgAvatar2 = nvgCreateImage(vg, "image/avatar_char2_20260602072055.png", 0)
@@ -235,11 +248,18 @@ function M.LoadArea(areaId)
         table.insert(S.platforms, data)
     end
 
-    -- 重置玩家位置
+    -- 重置玩家位置与物理状态
     if S.playerNode and S.playerBody then
         S.playerNode:SetPosition2D(0, 0)
         S.playerBody.linearVelocity = Vector2(0, 0)
+        S.playerBody.awake = true  -- 强制唤醒刚体，防止睡眠状态导致重力不生效
+        S.playerBody.gravityScale = 1.0  -- 确保重力正常
     end
+    -- 重置地面检测与滞空状态（旧碰撞体已删除，接触数据失效）
+    S.groundContactCount = 0
+    S.onGround = false
+    S.isHanging = false
+    S.hangCooldown = 0
 
     -- 进入关卡状态
     WorldMap.EnterArea(areaId)

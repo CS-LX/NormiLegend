@@ -5,6 +5,8 @@
 local C = require("GameConfig")
 local EditorState = require("editor.EditorState")
 local NodeCanvas = require("NodeCanvas")
+require("effects.builtin")  -- 注册内置效果
+local EffectRegistry = require("effects.EffectRegistry")
 
 local R = {}
 local levelEditor_ = EditorState.state
@@ -137,8 +139,15 @@ function R.DrawEditorCanvasTextures(vg, physW, physH)
     end
 
     -- 渲染物件贴图图层 + 颜色染色 + 位置标识框
+    local effectTime = time.elapsedTime
     for _, obj in ipairs(objects) do
-        local px, py, pw, ph = EditorState.WorldToCanvas(obj.x, obj.y, obj.w, obj.h)
+        -- 应用动态效果
+        local edx, edy, eScale, eAngle, eAlpha, renderCtx = EffectRegistry.Apply(obj.effects, effectTime)
+        local effX = obj.x + edx
+        local effY = obj.y + edy
+        local effW = obj.w * eScale
+        local effH = obj.h * eScale
+        local px, py, pw, ph = EditorState.WorldToCanvas(effX, effY, effW, effH)
         local sx = canvasX + px * dpr
         local sy = canvasY + py * dpr
         local sw = pw * dpr
@@ -150,7 +159,39 @@ function R.DrawEditorCanvasTextures(vg, physW, physH)
         -- 渲染顺序：列表上方（索引小）的层在视觉上层 → 逆序渲染
         local objCol = obj.color or {255, 255, 255, 255}
         local texLayers = obj.texLayers
-        if texLayers and #texLayers > 0 then
+
+        -- 如果有旋转效果，保存变换状态并绕物件中心旋转
+        local hasRotation = (eAngle ~= 0)
+        if hasRotation then
+            nvgSave(vg)
+            nvgTranslate(vg, cx, cy)
+            nvgRotate(vg, eAngle)
+            nvgTranslate(vg, -cx, -cy)
+        end
+
+        -- 序列帧效果渲染（renderCtx 优先级最高）
+        if renderCtx and renderCtx.type == "spritesheet" and renderCtx.path ~= "" then
+            local ssImg = GetNvgTexture(vg, renderCtx.path)
+            if ssImg then
+                local cols = renderCtx.cols or 1
+                local rows = renderCtx.rows or 1
+                local frameIdx = renderCtx.frameIndex or 0
+                local col = frameIdx % cols
+                local row = math.floor(frameIdx / cols)
+                -- 整张图铺满 cols*sw × rows*sh，偏移使当前帧对齐绘制区域
+                local sheetW = sw * cols
+                local sheetH = sh * rows
+                local offX = (cx - sw / 2) - col * sw
+                local offY = (cy - sh / 2) - row * sh
+                local alpha = eAlpha
+                local tintColor = nvgRGBA(objCol[1], objCol[2], objCol[3], math.floor((objCol[4] or 255) * alpha))
+                local paint = nvgImagePatternTinted(vg, offX, offY, sheetW, sheetH, 0, ssImg, tintColor)
+                nvgBeginPath(vg)
+                nvgRect(vg, cx - sw / 2, cy - sh / 2, sw, sh)
+                nvgFillPaint(vg, paint)
+                nvgFill(vg)
+            end
+        elseif texLayers and #texLayers > 0 then
             for tli = #texLayers, 1, -1 do
                 local tLayer = texLayers[tli]
                 if tLayer.visible ~= false then
@@ -159,7 +200,7 @@ function R.DrawEditorCanvasTextures(vg, physW, physH)
                     local tScH = tLayer.scaleH or 1.0
                     local drawW = sw * tScW
                     local drawH = sh * tScH
-                    local alpha = tLayer.opacity or 1.0
+                    local alpha = (tLayer.opacity or 1.0) * eAlpha
 
                     if texImg then
                         local tintColor = nvgRGBA(objCol[1], objCol[2], objCol[3], math.floor((objCol[4] or 255) * alpha))
@@ -195,7 +236,8 @@ function R.DrawEditorCanvasTextures(vg, physW, physH)
             local drawH = sh * tScH
 
             if texImg then
-                local tintColor = nvgRGBA(objCol[1], objCol[2], objCol[3], math.floor((objCol[4] or 255) * 0.9))
+                local baseAlpha = (objCol[4] or 255) * 0.9 * eAlpha
+                local tintColor = nvgRGBA(objCol[1], objCol[2], objCol[3], math.floor(baseAlpha))
                 local paint = nvgImagePatternTinted(vg, cx - drawW/2, cy - drawH/2, drawW, drawH, 0, texImg, tintColor)
                 nvgBeginPath(vg)
                 nvgRect(vg, cx - drawW/2, cy - drawH/2, drawW, drawH)
@@ -207,6 +249,10 @@ function R.DrawEditorCanvasTextures(vg, physW, physH)
             nvgStrokeColor(vg, nvgRGBA(255, 200, 50, 180))
             nvgStrokeWidth(vg, 1.5 * dpr)
             nvgStroke(vg)
+        end
+
+        if hasRotation then
+            nvgRestore(vg)
         end
     end
 
@@ -270,40 +316,44 @@ function R.DrawEditorCanvasTextures(vg, physW, physH)
         local cbSw = cbPw * dpr
         local cbSh = cbPh * dpr
 
-        -- 黄色边框
+        local isCamSel = levelEditor_.camBoundsSelected
+        -- 黄色边框（选中时更粗更亮）
         nvgBeginPath(vg)
         nvgRect(vg, cbSx, cbSy, cbSw, cbSh)
-        nvgStrokeColor(vg, nvgRGBA(255, 200, 50, 200))
-        nvgStrokeWidth(vg, 2.0 * dpr)
+        local cbBorderAlpha = isCamSel and 240 or 120
+        nvgStrokeColor(vg, nvgRGBA(255, 200, 50, cbBorderAlpha))
+        nvgStrokeWidth(vg, (isCamSel and 2.0 or 1.0) * dpr)
         nvgStroke(vg)
 
         -- 半透明填充标识
         nvgBeginPath(vg)
         nvgRect(vg, cbSx, cbSy, cbSw, cbSh)
-        nvgFillColor(vg, nvgRGBA(255, 220, 50, 15))
+        nvgFillColor(vg, nvgRGBA(255, 220, 50, isCamSel and 20 or 8))
         nvgFill(vg)
 
-        -- 四角锚点
-        local cbAnchorR = 5 * dpr
-        local cbCorners = {
-            {cbSx, cbSy}, {cbSx + cbSw, cbSy},
-            {cbSx, cbSy + cbSh}, {cbSx + cbSw, cbSy + cbSh},
-        }
-        for _, c in ipairs(cbCorners) do
-            nvgBeginPath(vg)
-            nvgCircle(vg, c[1], c[2], cbAnchorR)
-            nvgFillColor(vg, nvgRGBA(255, 200, 50, 240))
-            nvgFill(vg)
-            nvgStrokeColor(vg, nvgRGBA(255, 255, 255, 200))
-            nvgStrokeWidth(vg, 1.0 * dpr)
-            nvgStroke(vg)
+        -- 四角锚点（仅选中时显示）
+        if isCamSel then
+            local cbAnchorR = 5 * dpr
+            local cbCorners = {
+                {cbSx, cbSy}, {cbSx + cbSw, cbSy},
+                {cbSx, cbSy + cbSh}, {cbSx + cbSw, cbSy + cbSh},
+            }
+            for _, c in ipairs(cbCorners) do
+                nvgBeginPath(vg)
+                nvgCircle(vg, c[1], c[2], cbAnchorR)
+                nvgFillColor(vg, nvgRGBA(255, 200, 50, 240))
+                nvgFill(vg)
+                nvgStrokeColor(vg, nvgRGBA(255, 255, 255, 200))
+                nvgStrokeWidth(vg, 1.0 * dpr)
+                nvgStroke(vg)
+            end
         end
 
         -- 左上角标签
         nvgFontSize(vg, 10 * dpr)
         nvgFontFace(vg, "sans")
         nvgTextAlign(vg, NVG_ALIGN_LEFT + NVG_ALIGN_BOTTOM)
-        nvgFillColor(vg, nvgRGBA(255, 220, 80, 220))
+        nvgFillColor(vg, nvgRGBA(255, 220, 80, isCamSel and 220 or 120))
         nvgText(vg, cbSx + 3 * dpr, cbSy - 2 * dpr, "镜头范围")
 
         -- ====== 单屏视野参考框（青色虚线，居中显示） ======

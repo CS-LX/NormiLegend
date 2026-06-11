@@ -458,20 +458,23 @@ function M.BuildLevelEditorUI()
     end
 
     -- ====== 镜头范围框 UI 元素（黄色边框 + 四角锚点） ======
+    -- 渲染在最底层（在背景图层之后、物件之前），仅选中时显示锚点
     if levelEditor_.cameraBoundsEnabled and levelEditor_.cameraBounds then
         local cb = levelEditor_.cameraBounds
         local edWorldH = levelEditor_.worldH or 17.5
         -- cameraBounds.y 是 Y-up 底边，转为 top-down 的 top 坐标
         local cbTopY = edWorldH - cb.y - cb.h
         local cbPx, cbPy, cbPw, cbPh = getTitleMenu().WorldToCanvas(cb.x, cbTopY, cb.w, cb.h)
-        -- 范围框边框
+        local isCamSel = levelEditor_.camBoundsSelected
+        -- 范围框边框（未选中时淡化显示）
         canvasContent:AddChild(UI.Panel {
             id = "cam_bounds_frame",
             position = "absolute",
             left = cbPx, top = cbPy,
             width = math.max(cbPw, 4), height = math.max(cbPh, 4),
-            borderWidth = 2, borderColor = {255, 200, 50, 200},
-            backgroundColor = {255, 220, 50, 10},
+            borderWidth = isCamSel and 2 or 1,
+            borderColor = isCamSel and {255, 200, 50, 220} or {255, 200, 50, 100},
+            backgroundColor = {255, 220, 50, isCamSel and 12 or 5},
             borderRadius = 0,
             pointerEvents = "none",
         })
@@ -480,7 +483,7 @@ function M.BuildLevelEditorUI()
             position = "absolute",
             left = cbPx, top = cbPy - 16,
             width = 70, height = 14,
-            backgroundColor = {255, 200, 50, 180},
+            backgroundColor = {255, 200, 50, isCamSel and 180 or 80},
             borderRadius = 2,
             justifyContent = "center", alignItems = "center",
             pointerEvents = "none",
@@ -488,24 +491,26 @@ function M.BuildLevelEditorUI()
                 UI.Label { text = "镜头范围", fontSize = 9, fontColor = {30, 20, 0, 255} },
             },
         })
-        -- 四角锚点
-        local cbHandleS = 12
-        local cbCorners = {
-            { l = cbPx - cbHandleS/2,        t = cbPy - cbHandleS/2 },         -- 左上
-            { l = cbPx + cbPw - cbHandleS/2, t = cbPy - cbHandleS/2 },         -- 右上
-            { l = cbPx - cbHandleS/2,        t = cbPy + cbPh - cbHandleS/2 },  -- 左下
-            { l = cbPx + cbPw - cbHandleS/2, t = cbPy + cbPh - cbHandleS/2 },  -- 右下
-        }
-        for _, c in ipairs(cbCorners) do
-            canvasContent:AddChild(UI.Panel {
-                position = "absolute",
-                left = c.l, top = c.t,
-                width = cbHandleS, height = cbHandleS,
-                backgroundColor = {255, 200, 50, 240},
-                borderRadius = 2,
-                borderWidth = 1, borderColor = {255, 255, 255, 200},
-                pointerEvents = "none",
-            })
+        -- 四角锚点（仅选中时显示）
+        if isCamSel then
+            local cbHandleS = 12
+            local cbCorners = {
+                { l = cbPx - cbHandleS/2,        t = cbPy - cbHandleS/2 },         -- 左上
+                { l = cbPx + cbPw - cbHandleS/2, t = cbPy - cbHandleS/2 },         -- 右上
+                { l = cbPx - cbHandleS/2,        t = cbPy + cbPh - cbHandleS/2 },  -- 左下
+                { l = cbPx + cbPw - cbHandleS/2, t = cbPy + cbPh - cbHandleS/2 },  -- 右下
+            }
+            for _, c in ipairs(cbCorners) do
+                canvasContent:AddChild(UI.Panel {
+                    position = "absolute",
+                    left = c.l, top = c.t,
+                    width = cbHandleS, height = cbHandleS,
+                    backgroundColor = {255, 200, 50, 240},
+                    borderRadius = 2,
+                    borderWidth = 1, borderColor = {255, 255, 255, 200},
+                    pointerEvents = "none",
+                })
+            end
         end
     end
 
@@ -532,12 +537,19 @@ function M.BuildLevelEditorUI()
         children = { canvas, toolbar, propsPanel },
     }
 
-    -- 挂载到主菜单UI（如果关卡选择界面仍存在则在其上）
-    local levelSelect_ = getTitleMenu().levelSelect_
-    if levelSelect_.uiRoot then
-        levelSelect_.uiRoot:AddChild(levelEditor_.uiRoot)
-    elseif S.mainMenuUIRoot then
-        S.mainMenuUIRoot:AddChild(levelEditor_.uiRoot)
+    -- 挂载到父UI
+    if levelEditor_.openedFromGame then
+        -- 从游戏中打开时，挂到 editorGameRoot（重建UI时也需要重新挂载）
+        if levelEditor_.editorGameRoot then
+            levelEditor_.editorGameRoot:AddChild(levelEditor_.uiRoot)
+        end
+    else
+        local levelSelect_ = getTitleMenu().levelSelect_
+        if levelSelect_.uiRoot then
+            levelSelect_.uiRoot:AddChild(levelEditor_.uiRoot)
+        elseif S.mainMenuUIRoot then
+            S.mainMenuUIRoot:AddChild(levelEditor_.uiRoot)
+        end
     end
 
     -- 延迟恢复右侧面板滚动位置（等待下一帧布局完成后执行）
@@ -1119,6 +1131,197 @@ function M.BuildPropsPanel(panel, objects)
             panel:AddChild(StrategyEditor.Build(obj, "executorStrategy", function() M.BuildLevelEditorUI() end, function() getTitleMenu().PushUndoState() end))
         end
 
+        -- ============ 动态效果配置 ============
+        panel:AddChild(UI.Panel { width = "100%", height = 1, backgroundColor = {80,120,180,100}, marginTop = 6, marginBottom = 4 })
+        panel:AddChild(UI.Label { text = "动态效果", fontSize = 12, fontColor = {80, 180, 255, 255} })
+
+        -- 已配置的效果列表
+        if not obj.effects then obj.effects = {} end
+        local EffectRegistry = require("effects.EffectRegistry")
+        if #obj.effects > 0 then
+            for ei = 1, #obj.effects do
+                local eff = obj.effects[ei]
+                local effDef = EffectRegistry.Get(eff.id)
+                local effName = effDef and effDef.name or eff.id
+                local effRow = UI.Panel { flexDirection = "row", alignItems = "center", gap = 4, width = "100%", marginBottom = 3 }
+                effRow:AddChild(UI.Label { text = effName, fontSize = 10, fontColor = {180, 220, 255, 255}, flexGrow = 1 })
+                -- 参数编辑按钮
+                if effDef and effDef.params_schema and #effDef.params_schema > 0 then
+                    effRow:AddChild(UI.Button {
+                        text = "参数", fontSize = 9,
+                        paddingLeft = 6, paddingRight = 6, paddingTop = 2, paddingBottom = 2,
+                        backgroundColor = {60, 80, 120, 200}, borderRadius = 3,
+                        fontColor = {180, 220, 255, 255},
+                        onClick = function()
+                            -- 切换展开/收起
+                            eff._expanded = not eff._expanded
+                            M.BuildLevelEditorUI()
+                        end,
+                    })
+                end
+                -- 删除效果按钮
+                effRow:AddChild(UI.Button {
+                    text = "×", fontSize = 11,
+                    paddingLeft = 5, paddingRight = 5, paddingTop = 1, paddingBottom = 1,
+                    backgroundColor = {140, 50, 50, 200}, borderRadius = 3,
+                    fontColor = {255, 200, 200, 255},
+                    onClick = function()
+                        getTitleMenu().PushUndoState()
+                        table.remove(obj.effects, ei)
+                        M.BuildLevelEditorUI()
+                    end,
+                })
+                panel:AddChild(effRow)
+
+                -- 展开参数编辑
+                if eff._expanded and effDef and effDef.params_schema then
+                    if not eff.params then eff.params = {} end
+                    for _, schema in ipairs(effDef.params_schema) do
+                        local pKey = schema.key
+                        local pVal = eff.params[pKey]
+                        if pVal == nil then pVal = schema.default end
+                        local paramRow = UI.Panel { flexDirection = "row", alignItems = "center", gap = 4, width = "100%", marginBottom = 2, paddingLeft = 8 }
+                        paramRow:AddChild(UI.Label { text = schema.label or pKey, fontSize = 9, fontColor = {150, 180, 220, 200}, width = 60 })
+
+                        if schema.type == "texture" then
+                            -- 贴图选择器：从 customTextures 列表中选择
+                            local currentPath = tostring(pVal)
+                            local shortName = currentPath ~= "" and currentPath:match("[^/]+$") or "(无)"
+                            paramRow:AddChild(UI.Button {
+                                text = shortName, fontSize = 8, width = 80, height = 20,
+                                backgroundColor = {40, 50, 80, 255}, borderRadius = 2,
+                                borderWidth = 1, borderColor = {80, 120, 200, 180},
+                                fontColor = {180, 210, 255, 255},
+                                onClick = function()
+                                    -- 展开/收起贴图选择列表
+                                    eff._texPickerOpen = not eff._texPickerOpen
+                                    M.BuildLevelEditorUI()
+                                end,
+                            })
+                            panel:AddChild(paramRow)
+                            -- 贴图选择列表（展开时显示）
+                            if eff._texPickerOpen then
+                                local texList = levelEditor_.customTextures or {}
+                                local pickerPanel = UI.Panel { width = "100%", paddingLeft = 16, marginBottom = 4 }
+                                -- 清空选项
+                                pickerPanel:AddChild(UI.Button {
+                                    text = "清空", fontSize = 8,
+                                    paddingLeft = 6, paddingRight = 6, paddingTop = 2, paddingBottom = 2,
+                                    backgroundColor = {80, 40, 40, 200}, borderRadius = 2,
+                                    fontColor = {255, 180, 180, 255}, marginBottom = 2,
+                                    onClick = function()
+                                        getTitleMenu().PushUndoState()
+                                        eff.params[pKey] = ""
+                                        eff._texPickerOpen = false
+                                        M.BuildLevelEditorUI()
+                                    end,
+                                })
+                                -- customTextures 元素结构: { path=..., name=..., cat=... }
+                                for _, texAsset in ipairs(texList) do
+                                    local texPath = texAsset.path or ""
+                                    local texName = texAsset.name or texPath:match("[^/]+$") or texPath
+                                    local isCurrent = (texPath == currentPath)
+                                    pickerPanel:AddChild(UI.Button {
+                                        text = (isCurrent and "> " or "  ") .. texName, fontSize = 8,
+                                        width = "100%", height = 18,
+                                        paddingLeft = 6, paddingTop = 1, paddingBottom = 1,
+                                        backgroundColor = isCurrent and {50, 80, 140, 255} or {30, 40, 60, 200},
+                                        borderRadius = 2,
+                                        fontColor = isCurrent and {255, 255, 255, 255} or {160, 190, 220, 220},
+                                        onClick = function()
+                                            getTitleMenu().PushUndoState()
+                                            eff.params[pKey] = texPath
+                                            eff._texPickerOpen = false
+                                            M.BuildLevelEditorUI()
+                                        end,
+                                    })
+                                end
+                                if #texList == 0 then
+                                    pickerPanel:AddChild(UI.Label { text = "无可用贴图（请先在贴图工具中导入）", fontSize = 8, fontColor = {120, 120, 140, 180} })
+                                end
+                                panel:AddChild(pickerPanel)
+                            end
+                        elseif schema.type == "bool" then
+                            -- 布尔开关
+                            local boolVal = (tonumber(pVal) or 0) ~= 0
+                            paramRow:AddChild(UI.Button {
+                                text = boolVal and "ON" or "OFF", fontSize = 9, width = 40, height = 20,
+                                backgroundColor = boolVal and {40, 120, 80, 255} or {80, 40, 40, 255},
+                                borderRadius = 10, borderWidth = 1,
+                                borderColor = boolVal and {80, 200, 140, 200} or {160, 80, 80, 200},
+                                fontColor = {255, 255, 255, 255},
+                                onClick = function()
+                                    getTitleMenu().PushUndoState()
+                                    eff.params[pKey] = boolVal and 0 or 1
+                                    M.BuildLevelEditorUI()
+                                end,
+                            })
+                            panel:AddChild(paramRow)
+                        else
+                            -- 默认数值输入
+                            paramRow:AddChild(UI.TextField {
+                                value = tostring(pVal), fontSize = 9, width = 60, height = 20,
+                                backgroundColor = {30, 40, 60, 255}, fontColor = {200, 220, 255, 255},
+                                borderRadius = 2, borderWidth = 1, borderColor = {60, 100, 160, 150},
+                                paddingHorizontal = 4,
+                                onSubmit = function(self, txt)
+                                    getTitleMenu().PushUndoState()
+                                    local numVal = tonumber(txt)
+                                    if numVal then
+                                        if schema.min then numVal = math.max(schema.min, numVal) end
+                                        if schema.max then numVal = math.min(schema.max, numVal) end
+                                        eff.params[pKey] = numVal
+                                    end
+                                    M.BuildLevelEditorUI()
+                                end,
+                                onBlur = function(self)
+                                    local txt = self:GetValue()
+                                    local numVal = tonumber(txt)
+                                    if numVal then
+                                        if schema.min then numVal = math.max(schema.min, numVal) end
+                                        if schema.max then numVal = math.min(schema.max, numVal) end
+                                        eff.params[pKey] = numVal
+                                    end
+                                end,
+                            })
+                            if schema.min and schema.max then
+                                paramRow:AddChild(UI.Label { text = string.format("[%.1f~%.1f]", schema.min, schema.max), fontSize = 8, fontColor = {100, 130, 160, 150} })
+                            end
+                            panel:AddChild(paramRow)
+                        end
+                    end
+                end
+            end
+        else
+            panel:AddChild(UI.Label { text = "无动态效果", fontSize = 9, fontColor = {100, 140, 180, 150}, marginBottom = 2 })
+        end
+
+        -- 添加效果下拉按钮
+        local allEffectIds = EffectRegistry.GetIds()
+        local addEffRow = UI.Panel { flexDirection = "row", alignItems = "center", gap = 4, width = "100%", marginTop = 3, flexWrap = "wrap" }
+        for _, effId in ipairs(allEffectIds) do
+            local effDef = EffectRegistry.Get(effId)
+            addEffRow:AddChild(UI.Button {
+                text = "+" .. (effDef and effDef.name or effId), fontSize = 9,
+                paddingLeft = 6, paddingRight = 6, paddingTop = 3, paddingBottom = 3,
+                backgroundColor = {40, 70, 110, 200}, borderRadius = 3,
+                fontColor = {140, 200, 255, 255},
+                onClick = function()
+                    getTitleMenu().PushUndoState()
+                    -- 初始化 params 为默认值
+                    local params = {}
+                    if effDef and effDef.params_schema then
+                        for _, schema in ipairs(effDef.params_schema) do
+                            params[schema.key] = schema.default
+                        end
+                    end
+                    table.insert(obj.effects, { id = effId, params = params })
+                    M.BuildLevelEditorUI()
+                end,
+            })
+        end
+        panel:AddChild(addEffRow)
+
         -- 删除按钮
         panel:AddChild(UI.Button {
             text = "删除此物件", fontSize = 12, marginTop = 8,
@@ -1190,6 +1393,25 @@ function M.BuildPropsPanel(panel, objects)
             end,
         })
         headerRow:AddChild(UI.Label { text = "镜头范围框", fontSize = 12, fontColor = {220, 200, 100, 255} })
+        -- 选中编辑按钮
+        local isCamSel = levelEditor_.camBoundsSelected
+        headerRow:AddChild(UI.Button {
+            text = isCamSel and "🔓选中" or "🔒未选", fontSize = 10, height = 18,
+            paddingHorizontal = 4,
+            backgroundColor = isCamSel and {120, 100, 30, 220} or {50, 50, 40, 180},
+            borderRadius = 3, justifyContent = "center", alignItems = "center",
+            fontColor = isCamSel and {255, 240, 100, 255} or {150, 140, 100, 200},
+            borderWidth = isCamSel and 1 or 0, borderColor = {255, 220, 80, 180},
+            onClick = function()
+                levelEditor_.camBoundsSelected = not levelEditor_.camBoundsSelected
+                -- 选中镜头框时取消其他选中
+                if levelEditor_.camBoundsSelected then
+                    levelEditor_.selectedObj = nil
+                    levelEditor_.selectedBgLayer = nil
+                end
+                M.BuildLevelEditorUI()
+            end,
+        })
         panel:AddChild(headerRow)
 
         if cbEnabled and levelEditor_.cameraBounds then
@@ -1227,27 +1449,74 @@ function M.BuildPropsPanel(panel, objects)
                 })
                 return row
             end
-            panel:AddChild(makeCBRow("X:", cb.x or 0, function(v) cb.x = v end, 1, "%.1f"))
-            panel:AddChild(makeCBRow("Y:", cb.y or 0, function(v) cb.y = v end, 1, "%.1f"))
-            panel:AddChild(makeCBRow("宽:", cb.w or 30, function(v) cb.w = math.max(2, v) end, 1, "%.1f"))
-            panel:AddChild(makeCBRow("高:", cb.h or 17.5, function(v) cb.h = math.max(2, v) end, 1, "%.1f"))
-            -- 重置按钮
-            panel:AddChild(UI.Button {
-                text = "重置为世界大小", fontSize = 10, width = "100%", height = 22, marginTop = 2,
-                backgroundColor = {60, 60, 40, 200}, borderRadius = 3,
-                justifyContent = "center", alignItems = "center",
-                fontColor = {200, 190, 130, 255},
-                onClick = function()
-                    local wW = levelEditor_.worldW or 30
-                    local wH = levelEditor_.worldH or 17.5
-                    levelEditor_.cameraBounds = {
-                        x = wW * 0.05, y = wH * 0.05,
-                        w = wW * 0.9, h = wH * 0.9,
-                    }
-                    M.BuildLevelEditorUI()
-                end,
-            })
+            if isCamSel then
+                panel:AddChild(makeCBRow("X:", cb.x or 0, function(v) cb.x = v end, 1, "%.1f"))
+                panel:AddChild(makeCBRow("Y:", cb.y or 0, function(v) cb.y = v end, 1, "%.1f"))
+                panel:AddChild(makeCBRow("宽:", cb.w or 30, function(v) cb.w = math.max(2, v) end, 1, "%.1f"))
+                panel:AddChild(makeCBRow("高:", cb.h or 17.5, function(v) cb.h = math.max(2, v) end, 1, "%.1f"))
+                -- 重置按钮
+                panel:AddChild(UI.Button {
+                    text = "重置为世界大小", fontSize = 10, width = "100%", height = 22, marginTop = 2,
+                    backgroundColor = {60, 60, 40, 200}, borderRadius = 3,
+                    justifyContent = "center", alignItems = "center",
+                    fontColor = {200, 190, 130, 255},
+                    onClick = function()
+                        local wW = levelEditor_.worldW or 30
+                        local wH = levelEditor_.worldH or 17.5
+                        levelEditor_.cameraBounds = {
+                            x = wW * 0.05, y = wH * 0.05,
+                            w = wW * 0.9, h = wH * 0.9,
+                        }
+                        M.BuildLevelEditorUI()
+                    end,
+                })
+            else
+                panel:AddChild(UI.Label { text = "点击「选中」按钮后可编辑", fontSize = 9, fontColor = {160, 150, 100, 150}, marginTop = 2 })
+            end
         end
+    end
+
+    -- 角色渲染倍率调节
+    do
+        panel:AddChild(UI.Panel { width = "100%", height = 1, backgroundColor = {80,160,120,120}, marginTop = 8, marginBottom = 4 })
+        local scaleVal = levelEditor_.playerRenderScale or 1.0
+        local scaleRow = UI.Panel { flexDirection = "row", alignItems = "center", gap = 2, width = "100%", marginBottom = 2 }
+        scaleRow:AddChild(UI.Label { text = "角色倍率:", fontSize = 10, fontColor = {140, 220, 180, 255}, width = 58 })
+        scaleRow:AddChild(UI.Button {
+            text = "-", fontSize = 11, width = 18, height = 20,
+            backgroundColor = {30, 60, 40, 220}, borderRadius = 3,
+            justifyContent = "center", alignItems = "center", fontColor = {180, 255, 200, 255},
+            onClick = function()
+                levelEditor_.playerRenderScale = math.max(0.1, (levelEditor_.playerRenderScale or 1.0) - 0.05)
+                M.BuildLevelEditorUI()
+            end,
+        })
+        scaleRow:AddChild(UI.TextField {
+            value = string.format("%.2f", scaleVal), fontSize = 10, width = 50, height = 20,
+            backgroundColor = {20, 40, 30, 255}, fontColor = {200, 255, 220, 255},
+            borderRadius = 3, paddingHorizontal = 4,
+            onSubmit = function(self, txt)
+                local num = tonumber(txt)
+                if num then levelEditor_.playerRenderScale = math.max(0.1, num); M.BuildLevelEditorUI() end
+            end,
+            onBlur = function(self)
+                local txt = self:GetValue() or ""
+                local num = tonumber(txt)
+                if num and math.abs(num - scaleVal) > 0.001 then
+                    levelEditor_.playerRenderScale = math.max(0.1, num); M.BuildLevelEditorUI()
+                end
+            end,
+        })
+        scaleRow:AddChild(UI.Button {
+            text = "+", fontSize = 11, width = 18, height = 20,
+            backgroundColor = {30, 60, 40, 220}, borderRadius = 3,
+            justifyContent = "center", alignItems = "center", fontColor = {180, 255, 200, 255},
+            onClick = function()
+                levelEditor_.playerRenderScale = (levelEditor_.playerRenderScale or 1.0) + 0.05
+                M.BuildLevelEditorUI()
+            end,
+        })
+        panel:AddChild(scaleRow)
     end
 
     -- 贴图工具面板
@@ -1290,11 +1559,22 @@ function M.BuildPropsPanel(panel, objects)
                     backgroundColor = {0,0,0,0}, fontColor = layer.visible ~= false and {100,255,100,255} or {150,150,150,255},
                     onClick = function() layer.visible = not (layer.visible ~= false); M.BuildLevelEditorUI() end,
                 })
+                -- 锁定
+                layerRow:AddChild(UI.Button {
+                    text = layer.locked and "🔒" or "🔓", fontSize = 9, width = 18, height = 18,
+                    backgroundColor = {0,0,0,0}, fontColor = layer.locked and {255,180,80,255} or {120,120,140,200},
+                    onClick = function() layer.locked = not layer.locked; M.BuildLevelEditorUI() end,
+                })
                 -- 名称（点击选中）
                 layerRow:AddChild(UI.Button {
                     text = li .. "." .. (layer.name or "图层"), fontSize = 9, height = 18, flexGrow = 1,
-                    backgroundColor = {0,0,0,0}, fontColor = {200,190,240,255},
-                    onClick = function() levelEditor_.selectedBgLayer = li; M.BuildLevelEditorUI() end,
+                    backgroundColor = {0,0,0,0},
+                    fontColor = layer.locked and {140,130,170,180} or {200,190,240,255},
+                    onClick = function()
+                        levelEditor_.selectedBgLayer = li
+                        levelEditor_.camBoundsSelected = false
+                        M.BuildLevelEditorUI()
+                    end,
                 })
                 -- 上移
                 layerRow:AddChild(UI.Button {
@@ -1320,7 +1600,13 @@ function M.BuildPropsPanel(panel, objects)
             -- 选中图层属性编辑
             local selLayer = levelEditor_.selectedBgLayer and bgLayers[levelEditor_.selectedBgLayer]
             if selLayer then
-                panel:AddChild(UI.Label { text = "图层属性: " .. (selLayer.name or ""), fontSize = 10, fontColor = {160,150,200,255}, marginTop = 4 })
+                local layerLocked = selLayer.locked or false
+                local lockLabel = layerLocked and " [已锁定]" or ""
+                panel:AddChild(UI.Label { text = "图层属性: " .. (selLayer.name or "") .. lockLabel, fontSize = 10, fontColor = layerLocked and {200,150,100,200} or {160,150,200,255}, marginTop = 4 })
+                if layerLocked then
+                    panel:AddChild(UI.Label { text = "图层已锁定，解锁后可编辑", fontSize = 9, fontColor = {180,140,80,150}, marginTop = 2 })
+                end
+                if not layerLocked then
                 local function makeLayerRow(label, value, onApply, step, fmt)
                     step = step or 0.1
                     fmt = fmt or "%.2f"
@@ -1392,7 +1678,8 @@ function M.BuildPropsPanel(panel, objects)
                     end
                 end, 1, "%.1f"))
                 panel:AddChild(makeLayerRow("透明:", selLayer.opacity or 1.0, function(v) selLayer.opacity = math.max(0, math.min(1, v)) end, 0.1))
-                panel:AddChild(makeLayerRow("景深:", selLayer.depth or 0, function(v) selLayer.depth = math.max(0, v) end, 0.1, "%.1f"))
+                panel:AddChild(makeLayerRow("景深:", selLayer.depth or 0, function(v) selLayer.depth = math.max(0, v) end, 0.02, "%.2f"))
+                end -- if not layerLocked
             end
         end
 
@@ -1415,31 +1702,65 @@ function M.BuildPropsPanel(panel, objects)
             })
         end
 
-        -- 已导入素材列表（点击应用到当前目标）
+        -- 已导入素材列表（按分类展开显示）
         if #levelEditor_.customTextures > 0 then
             panel:AddChild(UI.Label { text = "已导入素材 (点击应用):", fontSize = 10, fontColor = {150,140,180,255}, marginTop = 6 })
+            -- 按分类分组
+            local catGroups = { bg = {}, tile = {}, seq = {}, solid = {}, other = {} }
             for tidx, asset in ipairs(levelEditor_.customTextures) do
-                local assetPath = asset.path
-                local assetName = asset.name
-                local catLabel = asset.cat == "bg" and "[背景]" or (asset.cat == "tile" and "[地面]" or "[其他]")
-                panel:AddChild(UI.Button {
-                    text = catLabel .. " " .. assetName, fontSize = 11, width = "100%", height = 26, marginBottom = 2,
-                    backgroundColor = {40, 35, 70, 200}, borderRadius = 4,
-                    justifyContent = "center", alignItems = "center",
-                    fontColor = {200, 180, 255, 255},
-                    borderWidth = 1, borderColor = {100, 80, 160, 150},
-                    onClick = function()
-                        local target = levelEditor_.textureBrowseTarget
-                        if target == "bg" then
-                            -- 多图层模式：添加为新背景图层
-                            getTitleMenu().AddBgLayer(assetPath, assetName)
-                        elseif type(target) == "number" and objects[target] then
-                            -- 多贴图图层模式：添加为新贴图图层
-                            getTitleMenu().AddObjTexLayer(target, assetPath, assetName)
+                local cat = asset.cat or "other"
+                if cat == "sequence" or cat == "seq" then cat = "seq" end
+                if not catGroups[cat] then cat = "other" end
+                table.insert(catGroups[cat], { idx = tidx, asset = asset })
+            end
+            local catOrder = {
+                { key = "bg", label = "背景", color = {100, 180, 100, 255} },
+                { key = "tile", label = "物件/地面", color = {180, 140, 80, 255} },
+                { key = "seq", label = "序列帧", color = {100, 160, 220, 255} },
+                { key = "solid", label = "纯色", color = {200, 200, 200, 255} },
+                { key = "other", label = "其他", color = {160, 140, 180, 255} },
+            }
+            for _, catInfo in ipairs(catOrder) do
+                local items = catGroups[catInfo.key]
+                if #items > 0 then
+                    local expanded = levelEditor_.texCatExpanded[catInfo.key] ~= false
+                    -- 分类标题行（可折叠）
+                    panel:AddChild(UI.Button {
+                        text = (expanded and "▼ " or "▶ ") .. catInfo.label .. " (" .. #items .. ")",
+                        fontSize = 10, width = "100%", height = 22, marginTop = 4, marginBottom = 2,
+                        backgroundColor = {50, 45, 80, 180}, borderRadius = 3,
+                        justifyContent = "center", alignItems = "center",
+                        fontColor = catInfo.color,
+                        borderWidth = 1, borderColor = {80, 70, 120, 120},
+                        onClick = function()
+                            levelEditor_.texCatExpanded[catInfo.key] = not expanded
+                            M.BuildLevelEditorUI()
+                        end,
+                    })
+                    -- 展开时显示素材
+                    if expanded then
+                        for _, item in ipairs(items) do
+                            local assetPath = item.asset.path
+                            local assetName = item.asset.name
+                            panel:AddChild(UI.Button {
+                                text = "  " .. assetName, fontSize = 11, width = "100%", height = 24, marginBottom = 1,
+                                backgroundColor = {40, 35, 70, 200}, borderRadius = 3,
+                                paddingLeft = 12,
+                                fontColor = {200, 180, 255, 255},
+                                borderWidth = 1, borderColor = {80, 65, 130, 120},
+                                onClick = function()
+                                    local target = levelEditor_.textureBrowseTarget
+                                    if target == "bg" then
+                                        getTitleMenu().AddBgLayer(assetPath, assetName)
+                                    elseif type(target) == "number" and objects[target] then
+                                        getTitleMenu().AddObjTexLayer(target, assetPath, assetName)
+                                    end
+                                    M.BuildLevelEditorUI()
+                                end,
+                            })
                         end
-                        M.BuildLevelEditorUI()
-                    end,
-                })
+                    end
+                end
             end
         else
             panel:AddChild(UI.Label {

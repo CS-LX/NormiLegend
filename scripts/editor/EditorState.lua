@@ -87,10 +87,13 @@ M.state = {
     nvgTextures = {},          -- path -> nvg image handle
     -- 手动导入的贴图素材列表
     customTextures = {},       -- { {path=..., name=..., cat=...}, ... }
+    texCatExpanded = { bg = true, tile = true, seq = true, solid = true, other = true },  -- 素材分类展开状态
     -- 镜头范围框（世界坐标，Y-up）
     -- 默认略小于编辑器世界，确保框在画布内可见
     cameraBounds = { x = 2, y = 1, w = 26, h = 15.5 },
     cameraBoundsEnabled = true, -- 是否启用镜头范围限制（默认开启预览）
+    playerRenderScale = 1.0,   -- 角色渲染倍率（乘以动画 scale，1.0=原始大小）
+    camBoundsSelected = false,  -- inspector 中是否选中镜头范围框（选中才可编辑）
     -- 镜头范围框拖拽
     camBoundsDragging = false,
     camBoundsDragType = nil,   -- "move" / "tl" / "tr" / "bl" / "br"

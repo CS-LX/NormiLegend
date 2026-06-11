@@ -31,6 +31,8 @@ S.groundContactCount = 0
 S.facingRight = true
 S.isHanging = false
 S.hangCooldown = 0
+S.activeJump = false
+S.jumpLoopIdx = 0
 S.wingShatterTimer = 0
 
 -- 动画
@@ -68,6 +70,7 @@ S.hitStunTimer = 0.0
 S.charStats = {
     [1] = { hp = 150, maxHP = 150, mp = 80, maxMP = 80 },
     [2] = { hp = 200, maxHP = 200, mp = 100, maxMP = 100 },
+    [3] = { hp = 120, maxHP = 120, mp = 60, maxMP = 60 },  -- 蓝白角色
 }
 S.playerHP = 150
 S.playerMaxHP = 150
@@ -75,7 +78,7 @@ S.playerMP = 80
 S.playerMaxMP = 80
 S.mpRegenTimer = 0.0
 
--- 当前角色 (1=冰法师, 2=黑红角娘)
+-- 当前角色 (1=冰法师, 2=黑红角娘, 3=蓝白角色)
 S.currentCharacter = 1
 
 -- 技能/背包面板
@@ -149,9 +152,21 @@ S.img2Heal = -1
 S.img2Hit = -1
 S.img2Burst = -1
 S.img2Block = -1
+-- 角色3纹理（蓝白角色：仅idle/run/jump，其他预留接口）
+S.img3Idle = -1
+S.img3Run = -1
+S.img3Jump = -1
+S.img3Attack = -1       -- 预留
+S.img3Block = -1        -- 预留
+S.img3Charge = -1       -- 预留
+S.img3Heal = -1         -- 预留
+S.img3Crouch = -1       -- 预留
+S.img3CrouchWalk = -1   -- 预留
+S.img3Hit = -1          -- 预留
 -- 头像
 S.imgAvatar1 = nil
 S.imgAvatar2 = nil
+S.imgAvatar3 = nil
 -- 技能图标
 S.iconChar1Q = nil
 S.iconChar1E = nil
@@ -229,8 +244,23 @@ S.animCropConfig2 = {
     [C.ANIM_HIT]         = { cropW = 1.00, cropH = 1.00, cropOffX = 0.00, cropOffY = 0.00, offsetX = 0.00, offsetY = 0.75, scale = 5.5 },
 }
 
+-- 角色3动画裁切配置（蓝白角色）
+S.animCropConfig3 = {
+    [C.ANIM_IDLE]        = { cropW = 1.00, cropH = 1.00, cropOffX = 0.00, cropOffY = 0.00, offsetX = 0.00, offsetY = 0.75, scale = 5.5 },
+    [C.ANIM_RUN]         = { cropW = 1.00, cropH = 1.00, cropOffX = 0.00, cropOffY = 0.00, offsetX = 0.00, offsetY = 0.75, scale = 5.5 },
+    [C.ANIM_JUMP]        = { cropW = 1.00, cropH = 1.00, cropOffX = 0.00, cropOffY = 0.00, offsetX = 0.00, offsetY = 0.75, scale = 5.5 },
+    [C.ANIM_ATTACK]      = { cropW = 1.00, cropH = 1.00, cropOffX = 0.00, cropOffY = 0.00, offsetX = 0.00, offsetY = 0.75, scale = 5.5 },
+    [C.ANIM_BLOCK]       = { cropW = 1.00, cropH = 1.00, cropOffX = 0.00, cropOffY = 0.00, offsetX = 0.00, offsetY = 0.75, scale = 5.5 },
+    [C.ANIM_CHARGE]      = { cropW = 1.00, cropH = 1.00, cropOffX = 0.00, cropOffY = 0.00, offsetX = 0.00, offsetY = 0.75, scale = 5.5 },
+    [C.ANIM_HEAL]        = { cropW = 1.00, cropH = 1.00, cropOffX = 0.00, cropOffY = 0.00, offsetX = 0.00, offsetY = 0.75, scale = 5.5 },
+    [C.ANIM_CROUCH]      = { cropW = 1.00, cropH = 1.00, cropOffX = 0.00, cropOffY = 0.00, offsetX = 0.00, offsetY = 0.75, scale = 5.5 },
+    [C.ANIM_CROUCH_WALK] = { cropW = 1.00, cropH = 1.00, cropOffX = 0.00, cropOffY = 0.00, offsetX = 0.00, offsetY = 0.75, scale = 5.5 },
+    [C.ANIM_HIT]         = { cropW = 1.00, cropH = 1.00, cropOffX = 0.00, cropOffY = 0.00, offsetX = 0.00, offsetY = 0.75, scale = 5.5 },
+}
+
 --- 获取当前角色的动画裁切配置
 function S.GetCurrentAnimCropConfig()
+    if S.currentCharacter == 3 then return S.animCropConfig3 end
     if S.currentCharacter == 2 then return S.animCropConfig2 end
     return S.animCropConfig1
 end

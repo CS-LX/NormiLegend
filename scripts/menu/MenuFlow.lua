@@ -8,6 +8,7 @@ local UI = require("urhox-libs/UI")
 local Video = require("urhox-libs/Video")
 local GMConsole = require("GMConsole")
 local SpriteEditor = require("SpriteEditor")
+local ChapterIconEditor = require("menu.ChapterIconEditor")
 
 local M = {}
 
@@ -561,7 +562,7 @@ M.CHAPTER_DATA = CHAPTER_DATA
 local CARD_W = 320          -- 选中卡片宽度
 local CARD_H = 420          -- 选中卡片高度
 local CARD_SCALE_SIDE = 0.65 -- 两侧卡片缩放
-local CARD_GAP = 280         -- 卡片中心间距
+local CARD_GAP = 560         -- 卡片中心间距（扩大两倍）
 local ANIM_DURATION = 0.3    -- 切换动画时长（秒）
 
 --- 显示章节选择界面
@@ -603,36 +604,101 @@ function M.ShowChapterSelect()
     -- 创建4张章节卡片（可点击切换）
     for i, chap in ipairs(CHAPTER_DATA) do
         local idx = i
-        local card = UI.Button {
-            id = "chapter_card_" .. i,
-            position = "absolute",
-            width = CARD_W, height = CARD_H,
-            backgroundColor = chap.color,
-            borderRadius = 16,
-            justifyContent = "center",
-            alignItems = "center",
-            children = {
-                UI.Label {
-                    text = chap.name,
-                    fontSize = 36,
-                    fontColor = {255, 255, 255, 255},
-                    textAlign = "center",
-                    pointerEvents = "none",
+        -- 尝试加载章节图标图层配置
+        ChapterIconEditor.LoadFromFile(idx)
+        local hasIconLayers = ChapterIconEditor.GetLayers(idx) ~= nil
+
+        local card
+        if hasIconLayers then
+            -- 有图层的章节：使用 Panel（无悬停高亮），不裁剪溢出
+            card = UI.Panel {
+                id = "chapter_card_" .. i,
+                position = "absolute",
+                width = CARD_W, height = CARD_H,
+                backgroundColor = {20, 18, 35, 255},
+                borderRadius = 16,
+                justifyContent = "center",
+                alignItems = "center",
+            }
+
+            -- 图层容器（允许溢出显示）
+            local layerContainer = ChapterIconEditor.BuildCardLayers(idx, CARD_W, CARD_H)
+            if layerContainer then
+                card:AddChild(layerContainer)
+            end
+
+            -- 章节名（底部）
+            card:AddChild(UI.Label {
+                text = chap.name,
+                fontSize = 16,
+                fontColor = {255, 255, 255, 180},
+                textAlign = "center",
+                pointerEvents = "none",
+                position = "absolute",
+                bottom = 12, left = 0, width = "100%",
+            })
+
+            -- 透明点击按钮（无悬停高亮，但检测 hover 用于动画）
+            card:AddChild(UI.Panel {
+                id = "chapter_click_" .. i,
+                position = "absolute", top = 0, left = 0,
+                width = "100%", height = "100%",
+                borderRadius = 16,
+                pointerEvents = "auto",
+                onClick = function()
+                    if chapterSelect_.animating then return end
+                    if idx ~= chapterSelect_.currentIndex then
+                        chapterSelect_.targetIndex = idx
+                        chapterSelect_.animTimer = 0
+                        chapterSelect_.animating = true
+                    else
+                        getTitleMenu().ShowLevelSelect(idx)
+                    end
+                end,
+                onPointerEnter = function()
+                    if idx == 1 then
+                        ChapterIconEditor.SetHovered(true)
+                    end
+                end,
+                onPointerLeave = function()
+                    if idx == 1 then
+                        ChapterIconEditor.SetHovered(false)
+                    end
+                end,
+            })
+        else
+            -- 无图层的章节：使用普通 Button
+            card = UI.Button {
+                id = "chapter_card_" .. i,
+                position = "absolute",
+                width = CARD_W, height = CARD_H,
+                backgroundColor = chap.color,
+                borderRadius = 16,
+                justifyContent = "center",
+                alignItems = "center",
+                overflow = "hidden",
+                children = {
+                    UI.Label {
+                        text = chap.name,
+                        fontSize = 36,
+                        fontColor = {255, 255, 255, 255},
+                        textAlign = "center",
+                        pointerEvents = "none",
+                    },
                 },
-            },
-            onClick = function()
-                if chapterSelect_.animating then return end
-                if idx ~= chapterSelect_.currentIndex then
-                    -- 点击非当前章节：切换到该章节
-                    chapterSelect_.targetIndex = idx
-                    chapterSelect_.animTimer = 0
-                    chapterSelect_.animating = true
-                else
-                    -- 点击当前章节：进入关卡选择
-                    getTitleMenu().ShowLevelSelect(idx)
-                end
-            end,
-        }
+                onClick = function()
+                    if chapterSelect_.animating then return end
+                    if idx ~= chapterSelect_.currentIndex then
+                        chapterSelect_.targetIndex = idx
+                        chapterSelect_.animTimer = 0
+                        chapterSelect_.animating = true
+                    else
+                        getTitleMenu().ShowLevelSelect(idx)
+                    end
+                end,
+            }
+        end
+
         cardContainer:AddChild(card)
         chapterSelect_.cards[i] = card
     end
@@ -720,11 +786,15 @@ function M.ShowChapterSelect()
     M.LayoutChapterCards(1.0)
 
     S.mainMenuUIRoot:AddChild(chapterSelect_.uiRoot)
+
+    -- 初始化章节图标编辑器
+    ChapterIconEditor.Init(chapterSelect_.uiRoot, chapterSelect_.cards)
 end
 
 --- 关闭章节选择界面
 function M.CloseChapterSelect()
     chapterSelect_.active = false
+    ChapterIconEditor.Destroy()
     if chapterSelect_.uiRoot then
         chapterSelect_.uiRoot:Destroy()
         chapterSelect_.uiRoot = nil
@@ -783,6 +853,11 @@ function M.LayoutChapterCards(progress)
             height = cardH,
             opacity = alpha,
         })
+
+        -- 章节1图层容器跟随卡片缩放
+        if i == 1 then
+            ChapterIconEditor.SetCardScale(scaleFactor)
+        end
     end
 
     -- 更新指示点
@@ -805,6 +880,9 @@ end
 --- 章节选择动画更新（每帧调用）
 function M.UpdateChapterSelect(dt)
     if not chapterSelect_.active then return end
+
+    -- 更新章节图标图层动画（呼吸 + 悬停）
+    ChapterIconEditor.Update(dt)
 
     -- 处理滑动手势
     if input:GetMouseButtonDown(MOUSEB_LEFT) then

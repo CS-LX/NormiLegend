@@ -887,7 +887,19 @@ function M.DrawPlayer(width, height, camX, camY)
 
     -- 选择当前序列帧图片
     local img = S.imgIdle
-    if S.currentCharacter == 2 then
+    if S.currentCharacter == 3 then
+        img = S.img3Idle
+        if S.currentAnim == C.ANIM_RUN then img = S.img3Run
+        elseif S.currentAnim == C.ANIM_JUMP then img = S.img3Jump
+        elseif S.currentAnim == C.ANIM_ATTACK then img = S.img3Attack
+        elseif S.currentAnim == C.ANIM_BLOCK then img = S.img3Block
+        elseif S.currentAnim == C.ANIM_CHARGE then img = S.img3Charge
+        elseif S.currentAnim == C.ANIM_HEAL then img = S.img3Heal
+        elseif S.currentAnim == C.ANIM_CROUCH then img = S.img3Crouch
+        elseif S.currentAnim == C.ANIM_CROUCH_WALK then img = S.img3CrouchWalk
+        elseif S.currentAnim == C.ANIM_HIT then img = S.img3Hit
+        end
+    elseif S.currentCharacter == 2 then
         img = S.img2Idle
         if S.currentAnim == C.ANIM_RUN then img = S.img2Run
         elseif S.currentAnim == C.ANIM_JUMP then img = S.img2Jump
@@ -914,8 +926,8 @@ function M.DrawPlayer(width, height, camX, camY)
 
     local frame = S.animFrame
 
-    -- 蹲下帧映射
-    if S.currentAnim == C.ANIM_CROUCH then
+    -- 蹲下帧映射（角色3暂无蹲下动画，使用idle fallback不需要帧映射）
+    if S.currentAnim == C.ANIM_CROUCH and S.currentCharacter ~= 3 then
         local map = (S.currentCharacter == 2) and C.CROUCH_FRAME_MAP_2 or C.CROUCH_FRAME_MAP_1
         local idx = math.max(1, math.min(S.animFrame, #map))
         frame = map[idx]

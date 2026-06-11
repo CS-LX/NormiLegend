@@ -145,6 +145,22 @@ function M.ShowLevelSelect(chapterIdx)
         end
 
         local lvIdx = i
+        -- 编辑按钮（右上角小按钮）
+        local editBtn = isUnlocked and UI.Button {
+            position = "absolute", top = 6, right = 6,
+            width = 32, height = 22,
+            backgroundColor = {80, 120, 200, 220},
+            borderRadius = 4,
+            justifyContent = "center", alignItems = "center",
+            zIndex = 10,
+            children = {
+                UI.Label { text = "编辑", fontSize = 9, fontColor = {255, 255, 255, 255}, pointerEvents = "none" },
+            },
+            onClick = function()
+                M.EnterLevelEditor(chapterIdx, lvIdx)
+            end,
+        } or nil
+
         local levelCard = UI.Button {
             id = "level_card_" .. i,
             width = 180, height = 200,
@@ -189,10 +205,12 @@ function M.ShowLevelSelect(chapterIdx)
             },
             onClick = function()
                 if isUnlocked then
-                    M.EnterLevelEditor(chapterIdx, lvIdx)
+                    M.PlayLevel(chapterIdx, lvIdx)
                 end
             end,
         }
+        -- 将编辑按钮叠加到卡片上
+        if editBtn then levelCard:AddChild(editBtn) end
         gridContainer:AddChild(levelCard)
     end
 
@@ -228,6 +246,38 @@ end
 local levelEditor_ = EditorState.state
 local EDITOR_TOOLS = EditorState.TOOLS
 
+--- 直接进入关卡游玩（跳过编辑器，直接启动预览/游戏）
+function M.PlayLevel(chapterIdx, levelIdx)
+    -- 设置关卡索引
+    levelEditor_.chapterIdx = chapterIdx
+    levelEditor_.levelIdx = levelIdx
+    levelEditor_.playedDirectly = true
+
+    -- 加载关卡数据（优先 JSON 文件，最后默认数据）
+    local key = chapterIdx .. "_" .. levelIdx
+    local jsonPath = "levels/" .. key .. ".json"
+    -- 始终尝试从 JSON 加载最新数据（覆盖内存缓存）
+    local loaded = M.ImportLevelData(jsonPath)
+    if not loaded and not levelEditor_.objects[key] then
+        levelEditor_.objects[key] = {
+            { type = "ground", x = -0.5, y = 12.5, w = 23.0, h = 3.0, name = "地面" },
+            { type = "platform", x = 5.0, y = 9.0, w = 4.0, h = 0.5, name = "平台1" },
+            { type = "platform", x = 12.0, y = 7.5, w = 3.0, h = 0.5, name = "平台2" },
+            { type = "platform", x = 11.0, y = 10.5, w = 3.0, h = 0.5, name = "platform5" },
+        }
+    end
+
+    -- 隐藏关卡选择UI
+    if levelSelect_.uiRoot then
+        levelSelect_.uiRoot:SetVisible(false)
+    end
+
+    -- 直接启动预览（不进入编辑器）
+    local EditorPreview = require("editor.EditorPreview")
+    EditorPreview.StartPreview()
+    print("[PLAY] 直接进入关卡: ch=" .. chapterIdx .. " lv=" .. levelIdx)
+end
+
 --- 进入关卡编辑器
 function M.EnterLevelEditor(chapterIdx, levelIdx)
     levelEditor_.active = true
@@ -239,19 +289,16 @@ function M.EnterLevelEditor(chapterIdx, levelIdx)
     -- 初始化关卡物件（优先从 JSON 导入，其次用内存缓存，最后用默认数据）
     local key = chapterIdx .. "_" .. levelIdx
     local jsonPath = "levels/" .. key .. ".json"
-    if not levelEditor_.objects[key] then
-        if fileSystem:FileExists(jsonPath) then
-            -- 从已导出的 JSON 文件还原完整状态
-            M.ImportLevelData(jsonPath)
-        else
-            -- 默认地形数据（第一章 第1-1关）
-            levelEditor_.objects[key] = {
-                { type = "ground", x = -0.5, y = 12.5, w = 23.0, h = 3.0, name = "地面" },
-                { type = "platform", x = 5.0, y = 9.0, w = 4.0, h = 0.5, name = "平台1" },
-                { type = "platform", x = 12.0, y = 7.5, w = 3.0, h = 0.5, name = "平台2" },
-                { type = "platform", x = 11.0, y = 10.5, w = 3.0, h = 0.5, name = "platform5" },
-            }
-        end
+    -- 始终尝试从 JSON 加载（覆盖内存缓存，确保数据最新）
+    local loaded = M.ImportLevelData(jsonPath)
+    if not loaded and not levelEditor_.objects[key] then
+        -- 默认地形数据
+        levelEditor_.objects[key] = {
+            { type = "ground", x = -0.5, y = 12.5, w = 23.0, h = 3.0, name = "地面" },
+            { type = "platform", x = 5.0, y = 9.0, w = 4.0, h = 0.5, name = "平台1" },
+            { type = "platform", x = 12.0, y = 7.5, w = 3.0, h = 0.5, name = "平台2" },
+            { type = "platform", x = 11.0, y = 10.5, w = 3.0, h = 0.5, name = "platform5" },
+        }
     end
 
     -- 导入默认素材（仅首次）
@@ -264,6 +311,15 @@ function M.EnterLevelEditor(chapterIdx, levelIdx)
         M.ImportTexture("image/transition_2.png", "过渡2", "tile")
         M.ImportTexture("image/transition_3.png", "过渡3", "tile")
     end
+    -- 地图素材文件夹（按前缀自动分类：背景→bg, 平台→tile）
+    -- 放在 if 外面，确保已有关卡数据也能补充新素材（ImportTexture 内部已去重）
+    M.ImportTexture("image/地图素材/背景-时隙废墟-中.png", "时隙废墟-中", "bg")
+    M.ImportTexture("image/地图素材/背景-时隙废墟-远.png", "时隙废墟-远", "bg")
+    M.ImportTexture("image/地图素材/背景-时隙废墟-远近.png", "时隙废墟-远近", "bg")
+    M.ImportTexture("image/地图素材/平台-镂空平台.png", "镂空平台", "tile")
+    -- 纯色素材
+    M.ImportTexture("image/白色.png", "白色", "solid")
+    M.ImportTexture("image/透明.png", "透明", "solid")
 
     M.BuildLevelEditorUI()
 end
@@ -480,6 +536,9 @@ end
 
 --- 退出关卡编辑器（回到关卡选择）
 function M.ExitLevelEditor()
+    -- 退出前自动保存当前编辑状态到文件（防止重新进入时读取旧数据）
+    M.ExportLevelTerrainData(true)
+
     levelEditor_.active = false
     if levelEditor_.uiRoot then
         levelEditor_.uiRoot:Destroy()
@@ -492,20 +551,149 @@ function M.IsLevelEditorOpen()
     return levelEditor_.active
 end
 
+--- 从游戏中打开关卡编辑器（加载当前关卡地形数据）
+--- @param chapterIdx number|nil 章节索引（默认1）
+--- @param levelIdx number|nil 关卡索引（默认1）
+function M.OpenEditorFromGame(chapterIdx, levelIdx)
+    chapterIdx = chapterIdx or 1
+    levelIdx = levelIdx or 1
+
+    -- 保存之前的UI根节点
+    levelEditor_.prevGameUIRoot = UI.GetRoot()
+    levelEditor_.openedFromGame = true
+
+    -- 设置编辑器模式标志（阻止游戏输入处理）
+    S.editorMode = true
+
+    -- 先创建编辑器容器根节点（BuildLevelEditorUI 会将 uiRoot 挂载到此）
+    local editorGameRoot = UI.Panel {
+        width = "100%", height = "100%",
+        pointerEvents = "box-none",
+        children = {
+            UI.Button {
+                text = "返回游戏", fontSize = 12,
+                position = "absolute", bottom = 16, right = 16,
+                zIndex = 100,
+                width = 80, height = 34,
+                backgroundColor = {180, 60, 60, 220},
+                color = "#ffffff",
+                borderRadius = 8,
+                borderWidth = 1, borderColor = {255, 100, 100, 180},
+                onClick = function()
+                    M.CloseEditorToGame()
+                end,
+            },
+        },
+    }
+    levelEditor_.editorGameRoot = editorGameRoot
+    UI.SetRoot(editorGameRoot)
+
+    -- 进入编辑器（BuildLevelEditorUI 会把 uiRoot 挂到 editorGameRoot）
+    M.EnterLevelEditor(chapterIdx, levelIdx)
+
+    print("[EDITOR] 从游戏中打开编辑器: ch=" .. chapterIdx .. " lv=" .. levelIdx)
+end
+
+--- 从编辑器返回游戏
+function M.CloseEditorToGame()
+    if not levelEditor_.openedFromGame then return end
+
+    -- 先导出当前状态到文件（静默模式，不弹UI）
+    M.ExportLevelTerrainData(true)
+
+    -- 退出编辑器
+    levelEditor_.active = false
+    if levelEditor_.editorGameRoot then
+        levelEditor_.editorGameRoot:Destroy()
+        levelEditor_.editorGameRoot = nil
+    end
+    levelEditor_.uiRoot = nil
+
+    -- 恢复游戏UI
+    if levelEditor_.prevGameUIRoot then
+        UI.SetRoot(levelEditor_.prevGameUIRoot)
+        levelEditor_.prevGameUIRoot = nil
+    end
+
+    -- 恢复游戏模式
+    S.editorMode = false
+    levelEditor_.openedFromGame = false
+
+    print("[EDITOR] 返回游戏")
+end
+
 --- 保存当前状态到撤销栈（在修改前调用）
 function M.PushUndoState()
     local ch = levelEditor_.chapterIdx
     local lv = levelEditor_.levelIdx
     local key = ch .. "_" .. lv
     local objects = levelEditor_.objects[key] or {}
-    -- 深拷贝当前对象列表（包括mappings）
+    -- 深拷贝当前对象列表（完整复制所有属性，包括贴图/效果/触发器/执行器）
     local snapshot = {}
     for i, obj in ipairs(objects) do
         local copy = { type = obj.type, x = obj.x, y = obj.y, w = obj.w, h = obj.h, name = obj.name }
+        -- 颜色
+        if obj.color then
+            copy.color = { obj.color[1], obj.color[2], obj.color[3], obj.color[4] }
+        end
+        -- 旧式单贴图（兼容）
+        if obj.texture then
+            copy.texture = obj.texture
+            copy.textureName = obj.textureName
+            copy.texScaleW = obj.texScaleW
+            copy.texScaleH = obj.texScaleH
+        end
+        -- 多贴图图层（深拷贝）
+        if obj.texLayers and #obj.texLayers > 0 then
+            copy.texLayers = {}
+            for _, layer in ipairs(obj.texLayers) do
+                table.insert(copy.texLayers, {
+                    path = layer.path,
+                    name = layer.name,
+                    opacity = layer.opacity,
+                    scaleW = layer.scaleW,
+                    scaleH = layer.scaleH,
+                    visible = layer.visible,
+                    lockAspect = layer.lockAspect,
+                })
+            end
+            copy.selectedTexLayer = obj.selectedTexLayer
+        end
+        -- 动态效果（深拷贝）
+        if obj.effects and #obj.effects > 0 then
+            copy.effects = {}
+            for _, eff in ipairs(obj.effects) do
+                local paramsCopy = {}
+                if eff.params then
+                    for k, v in pairs(eff.params) do paramsCopy[k] = v end
+                end
+                table.insert(copy.effects, { id = eff.id, params = paramsCopy })
+            end
+        end
+        -- mappings
         if obj.mappings then
             copy.mappings = {}
             for mi, v in ipairs(obj.mappings) do
                 copy.mappings[mi] = v
+            end
+        end
+        -- 触发器专有
+        if obj.type == "trigger" then
+            copy.triggerMethod = obj.triggerMethod
+            copy.triggerMethodDesc = obj.triggerMethodDesc
+            if obj.triggerStrategy then
+                local SN = require("StrategyNode")
+                copy.triggerStrategy = SN.Deserialize(SN.Serialize(obj.triggerStrategy))
+            end
+        end
+        -- 执行器专有
+        if obj.type == "executor" then
+            copy.executorEffect = obj.executorEffect
+            copy.executorEffectDesc = obj.executorEffectDesc
+            copy.hasCollision = obj.hasCollision
+            if obj.executorStrategy then
+                local SN = require("StrategyNode")
+                copy.executorStrategy = SN.Deserialize(SN.Serialize(obj.executorStrategy))
             end
         end
         snapshot[i] = copy
@@ -577,6 +765,11 @@ function M.UpdateLevelEditor(dt)
         end
     end
 
+    -- 导出面板打开时跳过画布交互（避免点击按钮同帧触发 BuildLevelEditorUI 销毁面板）
+    if levelEditor_.uiRoot and levelEditor_.uiRoot:FindById("terrain_export_overlay") then
+        return
+    end
+
     -- Ctrl+Z 撤销
     if input:GetKeyDown(KEY_CTRL) and input:GetKeyPress(KEY_Z) then
         M.UndoLevelEditor()
@@ -613,23 +806,64 @@ function M.UpdateLevelEditor(dt)
         end
     end
 
-    -- Ctrl+C 复制选中物件
+    -- Ctrl+C 复制选中物件（深拷贝所有属性）
     if input:GetKeyDown(KEY_CTRL) and input:GetKeyPress(KEY_C) then
         local key2 = levelEditor_.chapterIdx .. "_" .. levelEditor_.levelIdx
         local objs = levelEditor_.objects[key2] or {}
         if levelEditor_.selectedObj and objs[levelEditor_.selectedObj] then
             M.PushUndoState()
             local src = objs[levelEditor_.selectedObj]
-            local copy = { type = src.type, x = src.x + 1, y = src.y, w = src.w, h = src.h, name = src.name .. "_copy" }
-            if src.mappings then
-                copy.mappings = {}
+            local copy = { type = src.type, x = src.x + 1, y = src.y, w = src.w, h = src.h, name = (src.name or "") .. "_copy" }
+            -- 颜色
+            if src.color then
+                copy.color = { src.color[1], src.color[2], src.color[3], src.color[4] }
             end
-            -- 复制贴图属性
+            -- 旧式单贴图（兼容）
             if src.texture then
                 copy.texture = src.texture
                 copy.textureName = src.textureName
                 copy.texScaleW = src.texScaleW
                 copy.texScaleH = src.texScaleH
+            end
+            -- 多贴图图层（深拷贝）
+            if src.texLayers and #src.texLayers > 0 then
+                copy.texLayers = {}
+                for _, layer in ipairs(src.texLayers) do
+                    table.insert(copy.texLayers, {
+                        path = layer.path,
+                        name = layer.name,
+                        opacity = layer.opacity,
+                        scaleW = layer.scaleW,
+                        scaleH = layer.scaleH,
+                        visible = layer.visible,
+                        lockAspect = layer.lockAspect,
+                    })
+                end
+                copy.selectedTexLayer = src.selectedTexLayer
+            end
+            -- 动态效果（深拷贝）
+            if src.effects and #src.effects > 0 then
+                copy.effects = {}
+                for _, eff in ipairs(src.effects) do
+                    -- 深拷贝 params 表
+                    local paramsCopy = {}
+                    if eff.params then
+                        for k, v in pairs(eff.params) do paramsCopy[k] = v end
+                    end
+                    table.insert(copy.effects, { id = eff.id, params = paramsCopy })
+                end
+            end
+            -- 触发器专有
+            if src.type == "trigger" then
+                copy.triggerMethod = src.triggerMethod
+                copy.triggerMethodDesc = src.triggerMethodDesc
+                if src.mappings then copy.mappings = {} end
+            end
+            -- 执行器专有
+            if src.type == "executor" then
+                copy.executorEffect = src.executorEffect
+                copy.executorEffectDesc = src.executorEffectDesc
+                copy.hasCollision = src.hasCollision
             end
             table.insert(objs, copy)
             levelEditor_.selectedObj = #objs
@@ -803,6 +1037,7 @@ function M.UpdateLevelEditor(dt)
                 levelEditor_.selectedObj = hitIdx
                 levelEditor_.textureBrowseTarget = hitIdx
                 levelEditor_.objHitThisFrame = true  -- 防止同帧触发背景拖拽
+                levelEditor_.camBoundsSelected = false
                 M.BuildLevelEditorUI()
             end
         end
@@ -834,7 +1069,7 @@ function M.UpdateLevelEditor(dt)
         local hitBg = false
         -- 先检测选中图层的锚点
         local selBgIdx = levelEditor_.selectedBgLayer
-        if selBgIdx and bgLayers[selBgIdx] then
+        if selBgIdx and bgLayers[selBgIdx] and not bgLayers[selBgIdx].locked then
             local layer = bgLayers[selBgIdx]
             -- layer.y 是 Y-up 世界坐标（底边），需转为 top-down 画布坐标
             local canvasTopY = edWH - (layer.y or 0) - (layer.h or 6)
@@ -893,6 +1128,7 @@ function M.UpdateLevelEditor(dt)
 
     -- ====== 镜头范围框：锚点拖拽检测 ======
     if mousePressed and levelEditor_.cameraBoundsEnabled and levelEditor_.cameraBounds
+       and levelEditor_.camBoundsSelected
        and not levelEditor_.texDragging and not levelEditor_.bgDragging
        and not levelEditor_.camBoundsDragging and not levelEditor_.dragging
        and localX >= 0 and localX < canvasW and localY >= 0 and localY < canvasH then
@@ -1126,6 +1362,7 @@ function M.UpdateLevelEditor(dt)
                 levelEditor_.mouseDownX = mx
                 levelEditor_.mouseDownY = my
                 levelEditor_.selectedObj = hitIdx
+                levelEditor_.camBoundsSelected = false
             else
                 -- 点击空白处 → 进入潜在画布平移状态（等超过阈值再确认是拖拽还是点击）
                 levelEditor_.canvasPanPotential = true
@@ -1293,7 +1530,7 @@ M.DrawEditorCanvasTextures = EditorRenderer.DrawEditorCanvasTextures
 M.DrawPreview = EditorPreview.DrawPreview
 M._executeStrategy = EditorPreview._executeStrategy
 --- 导出关卡完整数据（JSON 格式，写入文件 + UI 反馈）
-function M.ExportLevelTerrainData()
+function M.ExportLevelTerrainData(silent)
     local ch = levelEditor_.chapterIdx
     local lv = levelEditor_.levelIdx
     local key = ch .. "_" .. lv
@@ -1355,6 +1592,13 @@ function M.ExportLevelTerrainData()
             if obj.executorStrategy and obj.executorStrategy.rootId then
                 local SN = require("StrategyNode")
                 o.executorStrategy = SN.Serialize(obj.executorStrategy)
+            end
+        end
+        -- 动态效果（通用，所有物件类型均可配置）
+        if obj.effects and #obj.effects > 0 then
+            o.effects = {}
+            for _, eff in ipairs(obj.effects) do
+                table.insert(o.effects, { id = eff.id, params = eff.params })
             end
         end
         return o
@@ -1433,6 +1677,8 @@ function M.ExportLevelTerrainData()
             w = levelEditor_.cameraBounds.w,
             h = levelEditor_.cameraBounds.h,
         },
+        -- 角色渲染倍率
+        playerRenderScale = levelEditor_.playerRenderScale or 1.0,
         -- 地形物件
         objects = serializedObjects,
         -- 背景图层
@@ -1444,7 +1690,7 @@ function M.ExportLevelTerrainData()
     -- 编码为 JSON
     local exportJson = cjson.encode(exportData)
 
-    -- 写入文件
+    -- 写入文件（游戏虚拟FS，用于游戏内持久化）
     fileSystem:CreateDir("levels")
     local filePath = "levels/" .. key .. ".json"
     local file = File(filePath, FILE_WRITE)
@@ -1458,9 +1704,13 @@ function M.ExportLevelTerrainData()
         print("[LEVEL EXPORT] 写入文件失败: " .. filePath)
     end
 
-    -- 同时打印到控制台（便于调试）
-    print("[LEVEL EXPORT] " .. chapName .. " " .. lvName .. " (JSON)")
+    -- 打印到控制台（带明确标记，便于AI检索）
+    print("===LEVEL_EXPORT_START===")
     print(exportJson)
+    print("===LEVEL_EXPORT_END===")
+
+    -- 静默模式时不显示UI（从 CloseEditorToGame 调用时使用）
+    if silent then return end
 
     -- 显示导出面板
     local statusText = writeOk
@@ -1541,18 +1791,30 @@ function M.ImportLevelData(filePath)
     local key = ch .. "_" .. lv
     filePath = filePath or ("levels/" .. key .. ".json")
 
-    -- 读取文件
-    if not fileSystem:FileExists(filePath) then
-        print("[LEVEL IMPORT] 文件不存在: " .. filePath)
-        return false
+    -- 优先从可写沙箱目录读取（ExportLevelTerrainData 写入的位置）
+    -- 这样用户编辑保存后再次进入能读到最新数据，不会被 assets/ 中的旧文件覆盖
+    local jsonStr = nil
+    if fileSystem:FileExists(filePath) then
+        local sandboxFile = File(filePath, FILE_READ)
+        if sandboxFile and sandboxFile:IsOpen() then
+            jsonStr = sandboxFile:ReadString()
+            sandboxFile:Close()
+            print("[LEVEL IMPORT] 从沙箱读取: " .. filePath)
+        end
     end
-    local file = File(filePath, FILE_READ)
-    if not file:IsOpen() then
-        print("[LEVEL IMPORT] 无法打开文件: " .. filePath)
-        return false
+    if not jsonStr then
+        -- Fallback: 从资源缓存读取（assets/ 打包资源）
+        if not cache:Exists(filePath) then
+            return false
+        end
+        local cacheFile = cache:GetFile(filePath)
+        if not cacheFile or not cacheFile:IsOpen() then
+            return false
+        end
+        jsonStr = cacheFile:ReadString()
+        cacheFile:Close()
+        print("[LEVEL IMPORT] 从资源缓存读取: " .. filePath)
     end
-    local jsonStr = file:ReadString()
-    file:Close()
 
     -- 解析 JSON
     local ok, data = pcall(cjson.decode, jsonStr)
@@ -1574,6 +1836,11 @@ function M.ImportLevelData(filePath)
         levelEditor_.cameraBounds.y = data.cameraBounds.y or 1
         levelEditor_.cameraBounds.w = data.cameraBounds.w or 26
         levelEditor_.cameraBounds.h = data.cameraBounds.h or 15.5
+    end
+
+    -- 还原角色渲染倍率
+    if data.playerRenderScale then
+        levelEditor_.playerRenderScale = data.playerRenderScale
     end
 
     -- 还原物件列表
@@ -1624,6 +1891,13 @@ function M.ImportLevelData(filePath)
                 if o.executorStrategy then
                     local SN = require("StrategyNode")
                     obj.executorStrategy = SN.Deserialize(o.executorStrategy)
+                end
+            end
+            -- 动态效果（通用）
+            if o.effects and #o.effects > 0 then
+                obj.effects = {}
+                for _, eff in ipairs(o.effects) do
+                    table.insert(obj.effects, { id = eff.id, params = eff.params or {} })
                 end
             end
             table.insert(objects, obj)

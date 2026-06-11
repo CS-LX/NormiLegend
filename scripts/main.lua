@@ -167,6 +167,18 @@ function Start()
                     SpriteEditor.Toggle()
                 end,
             },
+            UI.Button {
+                text = "地形", fontSize = 11, width = 56, height = 34,
+                backgroundColor = "rgba(0,60,120,0.7)", color = "#88ccff",
+                borderRadius = 8, borderWidth = 1, borderColor = "rgba(100,180,255,0.5)",
+                onClick = function()
+                    -- 使用最近游玩/编辑的关卡，默认1-1
+                    local editorState = require("editor.EditorState").state
+                    local ch = editorState.chapterIdx or 1
+                    local lv = editorState.levelIdx or 1
+                    TitleMenu.OpenEditorFromGame(ch, lv)
+                end,
+            },
         }
     }
 

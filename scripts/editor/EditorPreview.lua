@@ -8,6 +8,8 @@ local UI = require("urhox-libs/UI")
 local Animation = require("Animation")
 local Combat = require("Combat")
 local EditorState = require("editor.EditorState")
+require("effects.builtin")  -- 注册内置效果
+local EffectRegistry = require("effects.EffectRegistry")
 
 local P = {}
 local levelEditor_ = EditorState.state
@@ -263,8 +265,10 @@ function P.StopPreview()
         levelEditor_.previewUIRoot:RemoveChild(levelEditor_.uiRoot)
     end
 
-    -- 恢复主菜单UI根（预览时被替换了）
-    if S.mainMenuUIRoot then
+    -- 恢复UI根（预览时被替换了）
+    if levelEditor_.openedFromGame and levelEditor_.editorGameRoot then
+        UI.SetRoot(levelEditor_.editorGameRoot)
+    elseif S.mainMenuUIRoot then
         UI.SetRoot(S.mainMenuUIRoot)
     end
 
@@ -327,20 +331,27 @@ function P.StopPreview()
         getTitleMenu().levelSelect_.uiRoot:SetVisible(true)
     end
 
-    -- 显示编辑器UI并挂回正确父节点
-    if levelEditor_.uiRoot then
-        levelEditor_.uiRoot:SetVisible(true)
-        -- 编辑器UI可能还挂在已销毁的previewUIRoot上，重新挂载
-        if getTitleMenu().levelSelect_.uiRoot then
-            getTitleMenu().levelSelect_.uiRoot:AddChild(levelEditor_.uiRoot)
-        elseif S.mainMenuUIRoot then
-            S.mainMenuUIRoot:AddChild(levelEditor_.uiRoot)
-        end
+    -- 直接游玩模式：不需要恢复编辑器UI，直接回到关卡选择
+    if levelEditor_.playedDirectly then
+        levelEditor_.playedDirectly = false
+        print("[PREVIEW] 直接游玩结束，返回关卡选择")
     else
-        getTitleMenu().BuildLevelEditorUI()
+        -- 显示编辑器UI并挂回正确父节点
+        if levelEditor_.uiRoot then
+            levelEditor_.uiRoot:SetVisible(true)
+            -- 编辑器UI可能还挂在已销毁的previewUIRoot上，重新挂载
+            if levelEditor_.openedFromGame and levelEditor_.editorGameRoot then
+                levelEditor_.editorGameRoot:AddChild(levelEditor_.uiRoot)
+            elseif getTitleMenu().levelSelect_.uiRoot then
+                getTitleMenu().levelSelect_.uiRoot:AddChild(levelEditor_.uiRoot)
+            elseif S.mainMenuUIRoot then
+                S.mainMenuUIRoot:AddChild(levelEditor_.uiRoot)
+            end
+        else
+            getTitleMenu().BuildLevelEditorUI()
+        end
+        print("[PREVIEW] 预览结束")
     end
-
-    print("[PREVIEW] 预览结束")
 end
 
 --- 预览中打开/关闭编辑器
@@ -405,7 +416,7 @@ function P.UpdatePreview(dt)
         return
     end
 
-    -- 数字键1/2切换角色
+    -- 数字键1/2/3切换角色
     if input:GetKeyPress(KEY_1) then
         S.currentCharacter = 1
         S.currentAnim = C.ANIM_IDLE
@@ -413,6 +424,11 @@ function P.UpdatePreview(dt)
         S.animTimer = 0.0
     elseif input:GetKeyPress(KEY_2) then
         S.currentCharacter = 2
+        S.currentAnim = C.ANIM_IDLE
+        S.animFrame = 0
+        S.animTimer = 0.0
+    elseif input:GetKeyPress(KEY_3) then
+        S.currentCharacter = 3
         S.currentAnim = C.ANIM_IDLE
         S.animFrame = 0
         S.animTimer = 0.0
@@ -920,13 +936,12 @@ function P.DrawPreview(vg, physW, physH)
                 local ly = layer.y or 0
                 local lw = layer.w or 10
                 local lh = layer.h or 6
-                -- 景深视差：depth越大，随相机移动越慢
+                -- 景深视差：depth越大，随相机移动越慢（仅作用于X轴）
                 local parallax = 1.0 / (1.0 + depth)
                 local offsetX = camX * (1.0 - parallax)
-                local offsetY = camY * (1.0 - parallax)
-                -- 世界坐标转屏幕
-                local sx1, sy1 = worldToScreen(lx - offsetX, ly - offsetY + lh)
-                local sx2, sy2 = worldToScreen(lx - offsetX + lw, ly - offsetY)
+                -- 世界坐标转屏幕（Y轴不受景深影响）
+                local sx1, sy1 = worldToScreen(lx - offsetX, ly + lh)
+                local sx2, sy2 = worldToScreen(lx - offsetX + lw, ly)
                 local drawW = sx2 - sx1
                 local drawH = sy2 - sy1
                 local paint = nvgImagePattern(vg, sx1, sy1, drawW, drawH, 0, bgImg, opacity)
@@ -944,16 +959,21 @@ function P.DrawPreview(vg, physW, physH)
     local key = ch .. "_" .. lv
     local objects = levelEditor_.objects[key] or {}
 
+    local effectTime = time.elapsedTime
     for _, obj in ipairs(objects) do
-        local bx = obj.x + obj.w / 2
-        local by = levelEditor_.worldH - obj.y - obj.h / 2
+        -- 应用动态效果
+        local edx, edy, eScale, eAngle, eAlpha, renderCtx = EffectRegistry.Apply(obj.effects, effectTime)
+        local bx = (obj.x + edx) + obj.w / 2
+        local by = levelEditor_.worldH - (obj.y + edy) - obj.h / 2
         local sx, sy = worldToScreen(bx, by)
-        local pw = obj.w * ppu
-        local ph = obj.h * ppu
+        local pw = obj.w * ppu * eScale
+        local ph = obj.h * ppu * eScale
 
         -- 判断是否有可见贴图
         local hasVisibleTex = false
-        if obj.texLayers and #obj.texLayers > 0 then
+        if renderCtx and renderCtx.type == "spritesheet" and renderCtx.path ~= "" then
+            hasVisibleTex = true
+        elseif obj.texLayers and #obj.texLayers > 0 then
             for _, tl in ipairs(obj.texLayers) do
                 if tl.visible ~= false and tl.path and tl.path ~= "" then
                     hasVisibleTex = true; break
@@ -987,7 +1007,40 @@ function P.DrawPreview(vg, physW, physH)
         -- 渲染顺序：列表上方（索引小）的层在视觉上层 → 逆序渲染
         local prevObjCol = obj.color or {255, 255, 255, 255}
         local texLayers = obj.texLayers
-        if texLayers and #texLayers > 0 then
+
+        -- 如果有旋转效果，保存变换状态并绕物件中心旋转
+        local hasRotation = (eAngle ~= 0)
+        if hasRotation then
+            nvgSave(vg)
+            nvgTranslate(vg, sx, sy)
+            nvgRotate(vg, eAngle)
+            nvgTranslate(vg, -sx, -sy)
+        end
+
+        -- 序列帧效果渲染（renderCtx 优先级最高）
+        if renderCtx and renderCtx.type == "spritesheet" and renderCtx.path ~= "" then
+            local ssImg = GetNvgTexture(vg, renderCtx.path)
+            if ssImg then
+                local cols = renderCtx.cols or 1
+                local rows = renderCtx.rows or 1
+                local frameIdx = renderCtx.frameIndex or 0
+                local col = frameIdx % cols
+                local row = math.floor(frameIdx / cols)
+                -- 整张图铺满 cols*pw × rows*ph，偏移使当前帧对齐绘制区域
+                local sheetW = pw * cols
+                local sheetH = ph * rows
+                local offX = (sx - pw / 2) - col * pw
+                local offY = (sy - ph / 2) - row * ph
+                local alpha = eAlpha
+                local objCol = prevObjCol
+                local tintColor = nvgRGBA(objCol[1], objCol[2], objCol[3], math.floor((objCol[4] or 255) * alpha))
+                local paint = nvgImagePatternTinted(vg, offX, offY, sheetW, sheetH, 0, ssImg, tintColor)
+                nvgBeginPath(vg)
+                nvgRect(vg, sx - pw / 2, sy - ph / 2, pw, ph)
+                nvgFillPaint(vg, paint)
+                nvgFill(vg)
+            end
+        elseif texLayers and #texLayers > 0 then
             for tli = #texLayers, 1, -1 do
                 local tLayer = texLayers[tli]
                 if tLayer.visible ~= false then
@@ -997,7 +1050,7 @@ function P.DrawPreview(vg, physW, physH)
                         local tScH = tLayer.scaleH or 1.0
                         local drawW = pw * tScW
                         local drawH = ph * tScH
-                        local alpha = tLayer.opacity or 1.0
+                        local alpha = (tLayer.opacity or 1.0) * eAlpha
                         local tintColor = nvgRGBA(prevObjCol[1], prevObjCol[2], prevObjCol[3], math.floor((prevObjCol[4] or 255) * alpha))
                         local tPaint = nvgImagePatternTinted(vg, sx - drawW/2, sy - drawH/2, drawW, drawH, 0, texImg, tintColor)
                         nvgBeginPath(vg)
@@ -1014,13 +1067,18 @@ function P.DrawPreview(vg, physW, physH)
                 local tScH = obj.texScaleH or 1.0
                 local drawW = pw * tScW
                 local drawH = ph * tScH
-                local tintColor = nvgRGBA(prevObjCol[1], prevObjCol[2], prevObjCol[3], prevObjCol[4] or 255)
+                local baseAlpha = (prevObjCol[4] or 255) * eAlpha
+                local tintColor = nvgRGBA(prevObjCol[1], prevObjCol[2], prevObjCol[3], math.floor(baseAlpha))
                 local tPaint = nvgImagePatternTinted(vg, sx - drawW/2, sy - drawH/2, drawW, drawH, 0, texImg, tintColor)
                 nvgBeginPath(vg)
                 nvgRect(vg, sx - drawW/2, sy - drawH/2, drawW, drawH)
                 nvgFillPaint(vg, tPaint)
                 nvgFill(vg)
             end
+        end
+
+        if hasRotation then
+            nvgRestore(vg)
         end
 
         -- 边框（仅无贴图时显示）
@@ -1038,7 +1096,19 @@ function P.DrawPreview(vg, physW, physH)
 
     -- 选择当前序列帧图片
     local img = S.imgIdle
-    if S.currentCharacter == 2 then
+    if S.currentCharacter == 3 then
+        img = S.img3Idle
+        if S.currentAnim == C.ANIM_RUN then img = S.img3Run
+        elseif S.currentAnim == C.ANIM_JUMP then img = S.img3Jump
+        elseif S.currentAnim == C.ANIM_ATTACK then img = S.img3Attack
+        elseif S.currentAnim == C.ANIM_BLOCK then img = S.img3Block
+        elseif S.currentAnim == C.ANIM_CHARGE then img = S.img3Charge
+        elseif S.currentAnim == C.ANIM_HEAL then img = S.img3Heal
+        elseif S.currentAnim == C.ANIM_CROUCH then img = S.img3Crouch
+        elseif S.currentAnim == C.ANIM_CROUCH_WALK then img = S.img3CrouchWalk
+        elseif S.currentAnim == C.ANIM_HIT then img = S.img3Hit
+        end
+    elseif S.currentCharacter == 2 then
         img = S.img2Idle
         if S.currentAnim == C.ANIM_RUN then img = S.img2Run
         elseif S.currentAnim == C.ANIM_JUMP then img = S.img2Jump
@@ -1066,11 +1136,12 @@ function P.DrawPreview(vg, physW, physH)
     -- 动画帧与裁切配置
     local animCropConfig = S.GetCurrentAnimCropConfig()
     local animScale = (animCropConfig[S.currentAnim] and animCropConfig[S.currentAnim].scale) or 5.5
-    local playerDrawSize = C.PLAYER_RADIUS * animScale * ppu
+    local renderScale = levelEditor_.playerRenderScale or 1.0
+    local playerDrawSize = C.PLAYER_RADIUS * animScale * renderScale * ppu
 
     local frame = S.animFrame
-    -- 蹲下帧映射
-    if S.currentAnim == C.ANIM_CROUCH then
+    -- 蹲下帧映射（角色3暂无蹲下动画，跳过）
+    if S.currentAnim == C.ANIM_CROUCH and S.currentCharacter ~= 3 then
         local map = (S.currentCharacter == 2) and C.CROUCH_FRAME_MAP_2 or C.CROUCH_FRAME_MAP_1
         local idx = math.max(1, math.min(S.animFrame, #map))
         frame = map[idx]
