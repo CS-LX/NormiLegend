@@ -30,10 +30,16 @@ S.onGround = false
 S.groundContactCount = 0
 S.facingRight = true
 S.isHanging = false
-S.hangCooldown = 0
+S.hangCooldown = 0.5
 S.activeJump = false
 S.jumpLoopIdx = 0
 S.wingShatterTimer = 0
+
+-- 跳跃手感优化（Celeste 风格）
+S.coyoteTimer = 0        -- 土狼时间计时器
+S.jumpBufferTimer = 0    -- 跳跃缓冲计时器
+S.varJumpTimer = 0       -- 可变跳跃计时器（松手截断窗口）
+S.jumpWasCut = false     -- 跳跃是否被截断（用于施加加速下落重力）
 
 -- 动画
 S.currentAnim = C.ANIM_IDLE
@@ -72,14 +78,17 @@ S.charStats = {
     [2] = { hp = 200, maxHP = 200, mp = 100, maxMP = 100 },
     [3] = { hp = 120, maxHP = 120, mp = 60, maxMP = 60 },  -- 蓝白角色
 }
-S.playerHP = 150
-S.playerMaxHP = 150
-S.playerMP = 80
-S.playerMaxMP = 80
+S.playerHP = 120
+S.playerMaxHP = 120
+S.playerMP = 60
+S.playerMaxMP = 60
 S.mpRegenTimer = 0.0
 
 -- 当前角色 (1=冰法师, 2=黑红角娘, 3=蓝白角色)
-S.currentCharacter = 1
+S.currentCharacter = 3
+
+-- 当前角色策略（由 Player.ApplyCharacterStrategy 设置）
+S.currentCharStrategy = C.CharacterStrategy.normal
 
 -- 技能/背包面板
 S.showInventory = false
@@ -257,6 +266,9 @@ S.animCropConfig3 = {
     [C.ANIM_CROUCH_WALK] = { cropW = 1.00, cropH = 1.00, cropOffX = 0.00, cropOffY = 0.00, offsetX = 0.00, offsetY = 0.75, scale = 5.5 },
     [C.ANIM_HIT]         = { cropW = 1.00, cropH = 1.00, cropOffX = 0.00, cropOffY = 0.00, offsetX = 0.00, offsetY = 0.75, scale = 5.5 },
 }
+
+-- 角色垂直偏移（编辑器可调，叠加到 animCropConfig 的 offsetY）
+S.playerOffsetY = 0.0
 
 --- 获取当前角色的动画裁切配置
 function S.GetCurrentAnimCropConfig()

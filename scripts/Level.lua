@@ -238,6 +238,10 @@ function M.LoadArea(areaId)
     for _, data in ipairs(config.platforms) do
         local platformNode = S.scene:CreateChild("Platform")
         platformNode:SetPosition2D(data.x, data.y)
+        -- 应用旋转（编辑器角度为顺时针度数，Box2D 需要逆时针 → 取反）
+        if data.rotation and data.rotation ~= 0 then
+            platformNode.rotation2D = -data.rotation
+        end
         local platformBody = platformNode:CreateComponent("RigidBody2D")
         platformBody.bodyType = BT_STATIC
         local platformShape = platformNode:CreateComponent("CollisionBox2D")
@@ -255,11 +259,16 @@ function M.LoadArea(areaId)
         S.playerBody.awake = true  -- 强制唤醒刚体，防止睡眠状态导致重力不生效
         S.playerBody.gravityScale = 1.0  -- 确保重力正常
     end
-    -- 重置地面检测与滞空状态（旧碰撞体已删除，接触数据失效）
+    -- 重置地面检测与滞空/跳跃状态（旧碰撞体已删除，接触数据失效）
     S.groundContactCount = 0
     S.onGround = false
     S.isHanging = false
-    S.hangCooldown = 0
+    S.hangCooldown = C.HANG_COOLDOWN_TIME  -- 防止刚进关就触发滞空
+    S.activeJump = false
+    S.jumpWasCut = false
+    S.varJumpTimer = 0
+    S.coyoteTimer = 0
+    S.jumpBufferTimer = 0
 
     -- 进入关卡状态
     WorldMap.EnterArea(areaId)

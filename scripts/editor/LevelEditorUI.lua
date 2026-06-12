@@ -616,10 +616,35 @@ function M.BuildPropsPanel(panel, objects)
         local selIdx = levelEditor_.selectedObj
 
         panel:AddChild(UI.Panel { width = "100%", height = 1, backgroundColor = {80,80,120,100}, marginTop = 8, marginBottom = 4 })
-        panel:AddChild(UI.Label {
-            text = "编辑: " .. obj.name,
-            fontSize = 13, fontColor = {255, 220, 150, 255},
+        -- 物件名称（可编辑重命名）
+        local nameRow = UI.Panel { flexDirection = "row", alignItems = "center", gap = 4, width = "100%", marginBottom = 2 }
+        nameRow:AddChild(UI.Label {
+            text = "名称:", fontSize = 11, fontColor = {150, 150, 180, 255}, width = 30,
         })
+        nameRow:AddChild(UI.TextField {
+            value = obj.name,
+            fontSize = 12, height = 24, flexGrow = 1,
+            backgroundColor = {30, 30, 50, 255},
+            borderRadius = 3, borderWidth = 1, borderColor = {120, 100, 60, 200},
+            fontColor = {255, 220, 150, 255},
+            paddingHorizontal = 4,
+            onSubmit = function(self, text)
+                if text and #text > 0 and text ~= obj.name then
+                    getTitleMenu().PushUndoState()
+                    obj.name = text
+                    M.BuildLevelEditorUI()
+                end
+            end,
+            onBlur = function(self)
+                local text = self:GetValue() or ""
+                if #text > 0 and text ~= obj.name then
+                    getTitleMenu().PushUndoState()
+                    obj.name = text
+                    M.BuildLevelEditorUI()
+                end
+            end,
+        })
+        panel:AddChild(nameRow)
 
         -- 通用属性输入行构建函数（TextField + +/- 微调按钮）
         local function makeInputRow(label, value, onApply, step)
@@ -681,6 +706,7 @@ function M.BuildPropsPanel(panel, objects)
         panel:AddChild(makeInputRow("Y:", obj.y, function(v) obj.y = v end))
         panel:AddChild(makeInputRow("W:", obj.w, function(v) obj.w = math.max(0.5, v) end))
         panel:AddChild(makeInputRow("H:", obj.h, function(v) obj.h = math.max(0.5, v) end))
+        panel:AddChild(makeInputRow("R°:", obj.rotation or 0, function(v) obj.rotation = v % 360 end, 5))
 
         -- ============ 颜色选择器 ============
         panel:AddChild(UI.Panel { width = "100%", height = 1, backgroundColor = {80,80,120,100}, marginTop = 6, marginBottom = 4 })
@@ -947,6 +973,10 @@ function M.BuildPropsPanel(panel, objects)
                         selTLayer.scaleW = math.max(0.1, (selTLayer.scaleW or 1.0) * ratio)
                     end
                 end, 0.1))
+                -- 贴图旋转（度数）
+                panel:AddChild(makeTexLayerRow("旋转:", selTLayer.rotation or 0, function(v)
+                    selTLayer.rotation = v % 360
+                end, 15, "%.0f°"))
             end
         else
             panel:AddChild(UI.Label { text = "无贴图图层\n选择贴图工具添加", fontSize = 9, fontColor = {140,120,180,180}, marginTop = 2 })
@@ -1046,6 +1076,24 @@ function M.BuildPropsPanel(panel, objects)
                 end,
             })
 
+            -- ====== 碰撞体积 ======
+            panel:AddChild(UI.Panel { width = "100%", height = 1, backgroundColor = {80,80,120,60}, marginTop = 4, marginBottom = 4 })
+            local trigHasCol = obj.hasCollision or false
+            local colRow = UI.Panel { flexDirection = "row", alignItems = "center", gap = 6, width = "100%", marginBottom = 4 }
+            colRow:AddChild(UI.Label { text = "物理碰撞", fontSize = 11, fontColor = {180, 180, 200, 255} })
+            colRow:AddChild(UI.Button {
+                text = trigHasCol and "有碰撞" or "无碰撞", fontSize = 10,
+                paddingLeft = 10, paddingRight = 10, paddingTop = 3, paddingBottom = 3,
+                backgroundColor = trigHasCol and {120, 180, 120, 220} or {80, 60, 60, 200},
+                borderRadius = 3, fontColor = {255, 255, 255, 255},
+                onClick = function()
+                    getTitleMenu().PushUndoState()
+                    obj.hasCollision = not trigHasCol
+                    M.BuildLevelEditorUI()
+                end,
+            })
+            panel:AddChild(colRow)
+
             -- ====== 触发器策略节点 ======
             panel:AddChild(UI.Panel { width = "100%", height = 1, backgroundColor = {80,80,120,80}, marginTop = 6, marginBottom = 4 })
             panel:AddChild(UI.Label { text = "触发策略", fontSize = 12, fontColor = {220, 180, 50, 255} })
@@ -1119,10 +1167,27 @@ function M.BuildPropsPanel(panel, objects)
                     fontSize = 10, fontColor = {220, 200, 150, 255}, marginBottom = 2,
                 })
             end
-            panel:AddChild(UI.Label {
-                text = "有物理碰撞",
-                fontSize = 10, fontColor = {120, 180, 120, 200}, marginTop = 4,
+            -- 碰撞体积开关（执行器默认有碰撞）
+            local exHasCol = obj.hasCollision
+            if exHasCol == nil then exHasCol = true end
+            local exColRow = UI.Panel { flexDirection = "row", alignItems = "center", gap = 6, width = "100%", marginTop = 4 }
+            exColRow:AddChild(UI.Label { text = "物理碰撞", fontSize = 11, fontColor = {180, 180, 200, 255} })
+            exColRow:AddChild(UI.Button {
+                text = exHasCol and "有碰撞" or "无碰撞", fontSize = 10,
+                paddingLeft = 10, paddingRight = 10, paddingTop = 3, paddingBottom = 3,
+                backgroundColor = exHasCol and {120, 180, 120, 220} or {80, 60, 60, 200},
+                borderRadius = 3, fontColor = {255, 255, 255, 255},
+                onClick = function()
+                    getTitleMenu().PushUndoState()
+                    if obj.hasCollision == nil then
+                        obj.hasCollision = false
+                    else
+                        obj.hasCollision = not obj.hasCollision
+                    end
+                    M.BuildLevelEditorUI()
+                end,
             })
+            panel:AddChild(exColRow)
 
             -- ====== 执行器策略节点 ======
             panel:AddChild(UI.Panel { width = "100%", height = 1, backgroundColor = {80,80,120,80}, marginTop = 6, marginBottom = 4 })
@@ -1519,6 +1584,128 @@ function M.BuildPropsPanel(panel, objects)
         panel:AddChild(scaleRow)
     end
 
+    -- 角色垂直偏移调节（offsetY）
+    do
+        local oyVal = levelEditor_.playerOffsetY or 0.0
+        local oyRow = UI.Panel { flexDirection = "row", alignItems = "center", gap = 2, width = "100%", marginBottom = 2 }
+        oyRow:AddChild(UI.Label { text = "垂直偏移:", fontSize = 10, fontColor = {140, 220, 180, 255}, width = 58 })
+        oyRow:AddChild(UI.Button {
+            text = "-", fontSize = 11, width = 18, height = 20,
+            backgroundColor = {30, 60, 40, 220}, borderRadius = 3,
+            justifyContent = "center", alignItems = "center", fontColor = {180, 255, 200, 255},
+            onClick = function()
+                levelEditor_.playerOffsetY = (levelEditor_.playerOffsetY or 0.0) - 0.02
+                M.BuildLevelEditorUI()
+            end,
+        })
+        oyRow:AddChild(UI.TextField {
+            value = string.format("%.2f", oyVal), fontSize = 10, width = 50, height = 20,
+            backgroundColor = {20, 40, 30, 255}, fontColor = {200, 255, 220, 255},
+            borderRadius = 3, paddingHorizontal = 4,
+            onSubmit = function(self, txt)
+                local num = tonumber(txt)
+                if num then levelEditor_.playerOffsetY = num; M.BuildLevelEditorUI() end
+            end,
+            onBlur = function(self)
+                local txt = self:GetValue() or ""
+                local num = tonumber(txt)
+                if num and math.abs(num - oyVal) > 0.001 then
+                    levelEditor_.playerOffsetY = num; M.BuildLevelEditorUI()
+                end
+            end,
+        })
+        oyRow:AddChild(UI.Button {
+            text = "+", fontSize = 11, width = 18, height = 20,
+            backgroundColor = {30, 60, 40, 220}, borderRadius = 3,
+            justifyContent = "center", alignItems = "center", fontColor = {180, 255, 200, 255},
+            onClick = function()
+                levelEditor_.playerOffsetY = (levelEditor_.playerOffsetY or 0.0) + 0.02
+                M.BuildLevelEditorUI()
+            end,
+        })
+        panel:AddChild(oyRow)
+    end
+
+    -- 玩家初始位置设置
+    do
+        local hasStart = (levelEditor_.playerStartX ~= nil and levelEditor_.playerStartY ~= nil)
+        local startRow = UI.Panel { flexDirection = "row", alignItems = "center", gap = 2, width = "100%", marginBottom = 2 }
+        startRow:AddChild(UI.Label { text = "出生点:", fontSize = 10, fontColor = {140, 220, 180, 255}, width = 58 })
+        if hasStart then
+            startRow:AddChild(UI.TextField {
+                value = string.format("%.1f", levelEditor_.playerStartX), fontSize = 10, width = 38, height = 20,
+                backgroundColor = {20, 40, 30, 255}, fontColor = {200, 255, 220, 255},
+                borderRadius = 3, paddingHorizontal = 2,
+                onSubmit = function(self, txt)
+                    local num = tonumber(txt)
+                    if num then
+                        getTitleMenu().PushUndoState()
+                        levelEditor_.playerStartX = num
+                        M.BuildLevelEditorUI()
+                    end
+                end,
+                onBlur = function(self)
+                    local txt = self:GetValue() or ""
+                    local num = tonumber(txt)
+                    if num and math.abs(num - (levelEditor_.playerStartX or 0)) > 0.01 then
+                        getTitleMenu().PushUndoState()
+                        levelEditor_.playerStartX = num
+                        M.BuildLevelEditorUI()
+                    end
+                end,
+            })
+            startRow:AddChild(UI.Label { text = ",", fontSize = 10, fontColor = {140, 220, 180, 255} })
+            startRow:AddChild(UI.TextField {
+                value = string.format("%.1f", levelEditor_.playerStartY), fontSize = 10, width = 38, height = 20,
+                backgroundColor = {20, 40, 30, 255}, fontColor = {200, 255, 220, 255},
+                borderRadius = 3, paddingHorizontal = 2,
+                onSubmit = function(self, txt)
+                    local num = tonumber(txt)
+                    if num then
+                        getTitleMenu().PushUndoState()
+                        levelEditor_.playerStartY = num
+                        M.BuildLevelEditorUI()
+                    end
+                end,
+                onBlur = function(self)
+                    local txt = self:GetValue() or ""
+                    local num = tonumber(txt)
+                    if num and math.abs(num - (levelEditor_.playerStartY or 0)) > 0.01 then
+                        getTitleMenu().PushUndoState()
+                        levelEditor_.playerStartY = num
+                        M.BuildLevelEditorUI()
+                    end
+                end,
+            })
+            startRow:AddChild(UI.Button {
+                text = "清除", fontSize = 9, width = 30, height = 20,
+                backgroundColor = {80, 30, 30, 220}, borderRadius = 3,
+                justifyContent = "center", alignItems = "center", fontColor = {255, 180, 180, 255},
+                onClick = function()
+                    getTitleMenu().PushUndoState()
+                    levelEditor_.playerStartX = nil
+                    levelEditor_.playerStartY = nil
+                    M.BuildLevelEditorUI()
+                end,
+            })
+        else
+            startRow:AddChild(UI.Label { text = "自动", fontSize = 10, fontColor = {180, 180, 180, 200}, width = 30 })
+            startRow:AddChild(UI.Button {
+                text = "设置", fontSize = 9, width = 30, height = 20,
+                backgroundColor = {30, 60, 40, 220}, borderRadius = 3,
+                justifyContent = "center", alignItems = "center", fontColor = {180, 255, 200, 255},
+                onClick = function()
+                    getTitleMenu().PushUndoState()
+                    -- 默认放在世界中心
+                    levelEditor_.playerStartX = levelEditor_.worldW / 2
+                    levelEditor_.playerStartY = levelEditor_.worldH / 2
+                    M.BuildLevelEditorUI()
+                end,
+            })
+        end
+        panel:AddChild(startRow)
+    end
+
     -- 贴图工具面板
     if levelEditor_.currentTool == "texture" then
         panel:AddChild(UI.Panel { width = "100%", height = 1, backgroundColor = {120,80,180,120}, marginTop = 8, marginBottom = 4 })
@@ -1617,7 +1804,7 @@ function M.BuildPropsPanel(panel, objects)
                         text = "-", fontSize = 11, width = 18, height = 20,
                         backgroundColor = {50, 40, 80, 220}, borderRadius = 3,
                         justifyContent = "center", alignItems = "center", fontColor = {200,200,255,255},
-                        onClick = function() onApply(value - step); M.BuildLevelEditorUI() end,
+                        onClick = function() getTitleMenu().PushUndoState(); onApply(value - step); M.BuildLevelEditorUI() end,
                     })
                     row:AddChild(UI.TextField {
                         value = displayVal, fontSize = 10, width = 56, height = 20,
@@ -1625,19 +1812,19 @@ function M.BuildPropsPanel(panel, objects)
                         borderRadius = 3, paddingHorizontal = 4,
                         onSubmit = function(self, txt)
                             local num = tonumber(txt)
-                            if num then onApply(num); M.BuildLevelEditorUI() end
+                            if num then getTitleMenu().PushUndoState(); onApply(num); M.BuildLevelEditorUI() end
                         end,
                         onBlur = function(self)
                             local txt = self:GetValue() or ""
                             local num = tonumber(txt)
-                            if num and num ~= value then onApply(num); M.BuildLevelEditorUI() end
+                            if num and num ~= value then getTitleMenu().PushUndoState(); onApply(num); M.BuildLevelEditorUI() end
                         end,
                     })
                     row:AddChild(UI.Button {
                         text = "+", fontSize = 11, width = 18, height = 20,
                         backgroundColor = {50, 40, 80, 220}, borderRadius = 3,
                         justifyContent = "center", alignItems = "center", fontColor = {200,200,255,255},
-                        onClick = function() onApply(value + step); M.BuildLevelEditorUI() end,
+                        onClick = function() getTitleMenu().PushUndoState(); onApply(value + step); M.BuildLevelEditorUI() end,
                     })
                     return row
                 end
@@ -1678,7 +1865,112 @@ function M.BuildPropsPanel(panel, objects)
                     end
                 end, 1, "%.1f"))
                 panel:AddChild(makeLayerRow("透明:", selLayer.opacity or 1.0, function(v) selLayer.opacity = math.max(0, math.min(1, v)) end, 0.1))
-                panel:AddChild(makeLayerRow("景深:", selLayer.depth or 0, function(v) selLayer.depth = math.max(0, v) end, 0.02, "%.2f"))
+                panel:AddChild(makeLayerRow("景深:", selLayer.depth or 0, function(v) selLayer.depth = math.max(-0.9, v) end, 0.02, "%.2f"))
+
+                -- ====== 背景图层动态效果 ======
+                panel:AddChild(UI.Panel { width = "100%", height = 1, backgroundColor = {80,120,180,80}, marginTop = 4, marginBottom = 3 })
+                panel:AddChild(UI.Label { text = "动态效果", fontSize = 10, fontColor = {80, 180, 255, 220} })
+                if not selLayer.effects then selLayer.effects = {} end
+                local BgEffectRegistry = require("effects.EffectRegistry")
+                if #selLayer.effects > 0 then
+                    for bei = 1, #selLayer.effects do
+                        local bEff = selLayer.effects[bei]
+                        local bEffDef = BgEffectRegistry.Get(bEff.id)
+                        local bEffName = bEffDef and bEffDef.name or bEff.id
+                        local bEffRow = UI.Panel { flexDirection = "row", alignItems = "center", gap = 3, width = "100%", marginBottom = 2 }
+                        bEffRow:AddChild(UI.Label { text = bEffName, fontSize = 9, fontColor = {160, 210, 255, 220}, flexGrow = 1 })
+                        if bEffDef and bEffDef.params_schema and #bEffDef.params_schema > 0 then
+                            bEffRow:AddChild(UI.Button {
+                                text = "参数", fontSize = 8,
+                                paddingLeft = 5, paddingRight = 5, paddingTop = 1, paddingBottom = 1,
+                                backgroundColor = {50, 70, 110, 200}, borderRadius = 2,
+                                fontColor = {160, 200, 255, 220},
+                                onClick = function()
+                                    bEff._expanded = not bEff._expanded
+                                    M.BuildLevelEditorUI()
+                                end,
+                            })
+                        end
+                        bEffRow:AddChild(UI.Button {
+                            text = "×", fontSize = 10,
+                            paddingLeft = 4, paddingRight = 4, paddingTop = 1, paddingBottom = 1,
+                            backgroundColor = {130, 40, 40, 200}, borderRadius = 2,
+                            fontColor = {255, 180, 180, 255},
+                            onClick = function()
+                                getTitleMenu().PushUndoState()
+                                table.remove(selLayer.effects, bei)
+                                M.BuildLevelEditorUI()
+                            end,
+                        })
+                        panel:AddChild(bEffRow)
+                        -- 参数展开编辑
+                        if bEff._expanded and bEffDef and bEffDef.params_schema then
+                            if not bEff.params then bEff.params = {} end
+                            for _, schema in ipairs(bEffDef.params_schema) do
+                                local pKey = schema.key
+                                local pVal = bEff.params[pKey]
+                                if pVal == nil then pVal = schema.default end
+                                local pRow = UI.Panel { flexDirection = "row", alignItems = "center", gap = 3, width = "100%", marginBottom = 1, paddingLeft = 8 }
+                                pRow:AddChild(UI.Label { text = schema.label or pKey, fontSize = 8, fontColor = {130, 160, 200, 180}, width = 55 })
+                                pRow:AddChild(UI.TextField {
+                                    value = tostring(pVal), fontSize = 8, width = 50, height = 18,
+                                    backgroundColor = {30, 35, 55, 255}, fontColor = {190, 210, 255, 255},
+                                    borderRadius = 2, paddingHorizontal = 3,
+                                    onSubmit = function(self, txt)
+                                        getTitleMenu().PushUndoState()
+                                        local numVal = tonumber(txt)
+                                        if numVal then
+                                            if schema.min then numVal = math.max(schema.min, numVal) end
+                                            if schema.max then numVal = math.min(schema.max, numVal) end
+                                            bEff.params[pKey] = numVal
+                                        end
+                                        M.BuildLevelEditorUI()
+                                    end,
+                                    onBlur = function(self)
+                                        local txt = self:GetValue()
+                                        local numVal = tonumber(txt)
+                                        if numVal then
+                                            if schema.min then numVal = math.max(schema.min, numVal) end
+                                            if schema.max then numVal = math.min(schema.max, numVal) end
+                                            bEff.params[pKey] = numVal
+                                        end
+                                    end,
+                                })
+                                if schema.min and schema.max then
+                                    pRow:AddChild(UI.Label { text = string.format("[%.1f~%.1f]", schema.min, schema.max), fontSize = 7, fontColor = {90, 110, 140, 130} })
+                                end
+                                panel:AddChild(pRow)
+                            end
+                        end
+                    end
+                else
+                    panel:AddChild(UI.Label { text = "无动态效果", fontSize = 8, fontColor = {90, 130, 170, 130}, marginBottom = 1 })
+                end
+                -- 添加效果按钮行
+                local bgAllEffIds = BgEffectRegistry.GetIds()
+                local bgAddRow = UI.Panel { flexDirection = "row", alignItems = "center", gap = 3, width = "100%", marginTop = 2, flexWrap = "wrap" }
+                for _, effId in ipairs(bgAllEffIds) do
+                    local effDef = BgEffectRegistry.Get(effId)
+                    bgAddRow:AddChild(UI.Button {
+                        text = "+" .. (effDef and effDef.name or effId), fontSize = 8,
+                        paddingLeft = 5, paddingRight = 5, paddingTop = 2, paddingBottom = 2,
+                        backgroundColor = {35, 60, 100, 200}, borderRadius = 2,
+                        fontColor = {120, 190, 255, 220},
+                        onClick = function()
+                            getTitleMenu().PushUndoState()
+                            local params = {}
+                            if effDef and effDef.params_schema then
+                                for _, schema in ipairs(effDef.params_schema) do
+                                    params[schema.key] = schema.default
+                                end
+                            end
+                            table.insert(selLayer.effects, { id = effId, params = params })
+                            M.BuildLevelEditorUI()
+                        end,
+                    })
+                end
+                panel:AddChild(bgAddRow)
+
                 end -- if not layerLocked
             end
         end

@@ -12,11 +12,17 @@ local ChapterIconEditor = require("menu.ChapterIconEditor")
 
 local M = {}
 
--- 延迟引用 TitleMenu（避免循环依赖）
+-- 延迟引用（避免循环依赖）
 local TitleMenu_
 local function getTitleMenu()
     if not TitleMenu_ then TitleMenu_ = require("TitleMenu") end
     return TitleMenu_
+end
+
+local Player_
+local function getPlayer()
+    if not Player_ then Player_ = require("Player") end
+    return Player_
 end
 
 -- ============================================================================
@@ -138,41 +144,46 @@ function M.ShowTitleScreen()
         textAlign = "center",
     }
 
-    -- 创建标题页UI根（覆盖全屏）
+    -- 创建标题页UI根（16:9 居中容器 + 黑色背景）
     S.titleUIRoot = UI.Panel {
-        position = "absolute",
-        top = 0, left = 0,
         width = "100%", height = "100%",
+        justifyContent = "center", alignItems = "center",
         backgroundColor = {0, 0, 0, 255},
         children = {
-            -- 视频尾帧静态图底层（循环间隙透出尾帧而非黑屏）
             UI.Panel {
-                position = "absolute",
-                top = 0, left = 0,
-                width = "100%", height = "100%",
-                backgroundImage = "image/title_last_frame.png",
-                backgroundFit = "cover",
-            },
-            -- 视频层（覆盖在尾帧上方）
-            UI.Panel {
-                position = "absolute",
-                top = 0, left = 0,
-                width = "100%", height = "100%",
-                children = { S.titleVideoPlayer },
-            },
-            -- 点击遮罩层（透明，接收点击/触摸事件）
-            UI.Panel {
-                position = "absolute",
-                top = 0, left = 0,
-                width = "100%", height = "100%",
-                justifyContent = "flex-end",
-                alignItems = "center",
-                paddingBottom = 60,
-                onClick = function()
-                    M.DismissTitleScreen()
-                end,
+                width = 1920, height = 1080,
+                overflow = "hidden",
                 children = {
-                    hintLabel,
+                    -- 视频尾帧静态图底层（循环间隙透出尾帧而非黑屏）
+                    UI.Panel {
+                        position = "absolute",
+                        top = 0, left = 0,
+                        width = "100%", height = "100%",
+                        backgroundImage = "image/title_last_frame.png",
+                        backgroundFit = "cover",
+                    },
+                    -- 视频层（覆盖在尾帧上方）
+                    UI.Panel {
+                        position = "absolute",
+                        top = 0, left = 0,
+                        width = "100%", height = "100%",
+                        children = { S.titleVideoPlayer },
+                    },
+                    -- 点击遮罩层（透明，接收点击/触摸事件）
+                    UI.Panel {
+                        position = "absolute",
+                        top = 0, left = 0,
+                        width = "100%", height = "100%",
+                        justifyContent = "flex-end",
+                        alignItems = "center",
+                        paddingBottom = 60,
+                        onClick = function()
+                            M.DismissTitleScreen()
+                        end,
+                        children = {
+                            hintLabel,
+                        }
+                    }
                 }
             }
         }
@@ -395,11 +406,9 @@ function M.ShowMainMenu()
         },
     }
 
-    -- 主菜单UI（图层堆叠）
+    -- 主菜单UI（图层堆叠，固定 16:9 尺寸）
     S.mainMenuUIRoot = UI.Panel {
-        position = "absolute",
-        top = 0, left = 0,
-        width = "100%", height = "100%",
+        width = 1920, height = 1080,
         overflow = "hidden",
         children = {
             layerBg,
@@ -429,7 +438,15 @@ function M.ShowMainMenu()
             },
         },
     }
-    UI.SetRoot(S.mainMenuUIRoot)
+
+    -- 外层居中容器（黑色背景填充非安全区域）
+    local mainMenuOuter = UI.Panel {
+        width = "100%", height = "100%",
+        justifyContent = "center", alignItems = "center",
+        backgroundColor = {0, 0, 0, 255},
+        children = { S.mainMenuUIRoot },
+    }
+    UI.SetRoot(mainMenuOuter)
     -- 存储引用供动画使用
     S.mainMenuUIRoot.menuPanel = menuPanel
     S.mainMenuUIRoot.layerBg = layerBg
@@ -930,12 +947,23 @@ function M.EnterGameWorld()
     S.mainMenuUIRoot = nil
     S.enteredGameFromChapterSelect = true  -- 标记来源，ESC返回章节选择
 
-    -- 过场后切换到游戏界面
+    -- 番外篇使用 sideStory 策略（允许角色切换）
+    getPlayer().ApplyCharacterStrategy("sideStory")
+
+    -- 过场后切换到游戏界面（16:9 安全区域容器）
     M.ShowTransition(function()
         local uiRoot = UI.Panel {
             width = "100%", height = "100%",
+            justifyContent = "center", alignItems = "center",
             pointerEvents = "box-none",
-            children = { S.backButton, S.topButtonBar, S.mapBackButton, S.skillButtonPanel, S.charSwitchPanel, S.skillPanelUI, S.inventoryPanelUI, S.escPopupUI, SpriteEditor.GetPanel() }
+            children = {
+                UI.Panel {
+                    width = 1920, height = 1080,
+                    pointerEvents = "box-none",
+                    overflow = "hidden",
+                    children = { S.backButton, S.topButtonBar, S.mapBackButton, S.skillButtonPanel, S.charSwitchPanel, S.skillPanelUI, S.inventoryPanelUI, S.escPopupUI, SpriteEditor.GetPanel() }
+                }
+            }
         }
         UI.SetRoot(uiRoot)
 
@@ -949,6 +977,8 @@ end
 --- 从游戏世界返回章节选择（番外篇退出用）
 function M.ReturnToChapterSelect()
     S.enteredGameFromChapterSelect = false
+    -- 离开番外篇，恢复为 normal 策略
+    getPlayer().ApplyCharacterStrategy("normal")
     M.ShowTransition(function()
         M.ShowMainMenu()
         M.ShowChapterSelect()

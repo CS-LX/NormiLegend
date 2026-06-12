@@ -21,10 +21,38 @@ local M = {}
 -- 角色切换
 -- ============================================================================
 
---- 刷新右侧角色切换面板（只显示非当前角色）
+--- 应用角色策略（在进入关卡时调用）
+---@param strategyKey string "normal" | "sideStory"
+function M.ApplyCharacterStrategy(strategyKey)
+    local strategy = C.CharacterStrategy[strategyKey]
+    if not strategy then
+        print("[CHARACTER] 未知策略: " .. tostring(strategyKey) .. "，使用 normal")
+        strategy = C.CharacterStrategy.normal
+    end
+    S.currentCharStrategy = strategy
+    -- 切换到策略指定的默认角色
+    S.currentCharacter = strategy.defaultChar
+    -- 恢复对应角色属性
+    S.playerHP = S.charStats[strategy.defaultChar].hp
+    S.playerMaxHP = S.charStats[strategy.defaultChar].maxHP
+    S.playerMP = S.charStats[strategy.defaultChar].mp
+    S.playerMaxMP = S.charStats[strategy.defaultChar].maxMP
+    -- 刷新切换面板
+    M.RefreshCharSwitchPanel()
+    print("[CHARACTER] 应用策略: " .. strategyKey .. " → 默认角色" .. strategy.defaultChar .. ", 允许切换=" .. tostring(strategy.allowSwitch))
+end
+
+--- 刷新右侧角色切换面板（根据策略控制显示）
 function M.RefreshCharSwitchPanel()
     if not S.charSwitchPanel then return end
     S.charSwitchPanel:RemoveAllChildren()
+
+    -- 策略不允许切换时，隐藏面板
+    if not S.currentCharStrategy.allowSwitch then
+        S.charSwitchPanel:SetVisible(false)
+        return
+    end
+    S.charSwitchPanel:SetVisible(true)
 
     local charList = {
         { idx = 1, name = "冰法师", avatar = "image/avatar_char1_20260602072030.png", border = { 100, 180, 255, 220 } },
@@ -33,7 +61,12 @@ function M.RefreshCharSwitchPanel()
     }
 
     for _, info in ipairs(charList) do
-        if info.idx ~= S.currentCharacter then
+        -- 只显示策略允许的、非当前角色
+        local available = false
+        for _, c in ipairs(S.currentCharStrategy.availableChars) do
+            if c == info.idx then available = true; break end
+        end
+        if available and info.idx ~= S.currentCharacter then
             local btn = UI.Button {
                 width = 52, height = 52,
                 borderRadius = 26,
@@ -168,6 +201,11 @@ function M.HandlePhysicsBeginContact(eventType, eventData)
             S.playerBody.gravityScale = 1.0
             S.wingShatterTimer = C.WING_SHATTER_DURATION
         end
+        -- 落地时重置跳跃截断状态
+        if S.jumpWasCut and S.playerBody then
+            S.jumpWasCut = false
+            S.playerBody.gravityScale = 1.0
+        end
     end
 end
 
@@ -227,8 +265,8 @@ function M.Update(dt)
         end
     end
 
-    -- 数字键切换角色（1=冰法师, 2=黑红角娘, 3=蓝白角色）
-    if not S.editorMode then
+    -- 数字键切换角色（受策略控制）
+    if not S.editorMode and S.currentCharStrategy.allowSwitch then
         if input:GetKeyPress(KEY_1) then M.SwitchToCharacter(1) end
         if input:GetKeyPress(KEY_2) then M.SwitchToCharacter(2) end
         if input:GetKeyPress(KEY_3) then M.SwitchToCharacter(3) end
@@ -282,21 +320,66 @@ function M.Update(dt)
     S.jumpButtonTap = false
     local jumpHeld = input:GetKeyDown(KEY_SPACE) or input:GetKeyDown(KEY_W) or input:GetKeyDown(KEY_UP) or input:GetKeyDown(KEY_K) or jumpBtnHeld
 
-    if S.onGround and jumpPressed and not S.isCharging and not S.chargeReleased and math.abs(S.playerBody.linearVelocity.y) < 2.0 then
+    -- [Celeste优化1] 土狼时间：离地后短暂宽限期仍可跳跃
+    if S.onGround then
+        S.coyoteTimer = C.COYOTE_TIME
+    else
+        S.coyoteTimer = math.max(0, S.coyoteTimer - dt)
+    end
+
+    -- [Celeste优化2] 跳跃缓冲：按键后短暂窗口内落地自动跳
+    if jumpPressed then
+        S.jumpBufferTimer = C.JUMP_BUFFER_TIME
+    else
+        S.jumpBufferTimer = math.max(0, S.jumpBufferTimer - dt)
+    end
+
+    -- 跳跃条件：(在地面 OR 土狼时间内) AND (刚按下 OR 缓冲有效)
+    local canJump = S.onGround or S.coyoteTimer > 0
+    local wantsJump = jumpPressed or S.jumpBufferTimer > 0
+
+    if canJump and wantsJump and not S.isCharging and not S.chargeReleased and math.abs(S.playerBody.linearVelocity.y) < 2.0 then
         S.onGround = false
         S.groundContactCount = 0
+        S.coyoteTimer = 0          -- 消耗土狼时间，防止二段跳
+        S.jumpBufferTimer = 0      -- 消耗跳跃缓冲
         S.activeJump = true
+        S.jumpWasCut = false       -- 新跳跃重置截断标记
+        S.varJumpTimer = C.VAR_JUMP_TIME  -- [Celeste优化3] 启动可变跳跃窗口
+        S.hangCooldown = C.HANG_COOLDOWN_TIME  -- 防止同一次跳跃下落阶段自动触发滞空
         S.playerBody.linearVelocity = Vector2(desiredVelX, C.PLAYER_JUMP_SPEED)
         S.playerBody.awake = true
         S.isHanging = false
         S.playerBody.gravityScale = 1.0
-    elseif not S.onGround and jumpHeld and not S.isHanging and S.hangCooldown <= 0 and S.playerBody.linearVelocity.y < 0 then
-        -- 空中下落期间长按跳跃键：进入滞空
+    elseif not S.onGround and jumpHeld and not S.isHanging and S.hangCooldown <= 0 and S.playerBody.linearVelocity.y < 0 and not S.jumpWasCut then
+        -- 空中下落期间长按跳跃键：进入滞空（保留原有机制，截断后不触发）
         S.isHanging = true
         S.hangCooldown = C.HANG_COOLDOWN_TIME
         S.playerBody.gravityScale = C.HANG_GRAVITY_SCALE
         local vel = S.playerBody.linearVelocity
         S.playerBody.linearVelocity = Vector2(vel.x, vel.y * 0.3)
+    end
+
+    -- [Celeste优化3] 可变跳跃高度：窗口内松手截断上升速度
+    if S.varJumpTimer > 0 then
+        S.varJumpTimer = S.varJumpTimer - dt
+        if not jumpHeld then
+            -- 松手 → 截断上升速度，实现轻按低跳
+            local vel = S.playerBody.linearVelocity
+            if vel.y > 0 then
+                S.playerBody.linearVelocity = Vector2(vel.x, vel.y * C.JUMP_CUT_MULT)
+            end
+            S.varJumpTimer = 0
+            S.jumpWasCut = true
+            -- 施加加速下落重力，让低跳迅速回落
+            S.playerBody.gravityScale = C.JUMP_CUT_GRAVITY
+        end
+    end
+
+    -- 截断后加速下落：落地时恢复正常重力
+    if S.jumpWasCut and S.onGround then
+        S.jumpWasCut = false
+        S.playerBody.gravityScale = 1.0
     end
 
     -- 滞空状态：松开跳跃键结束
@@ -317,20 +400,22 @@ function M.Update(dt)
             attackPressed = true
         end
     end
-    if attackPressed and not S.isBlocking and not S.isCharging and not S.chargeReleased then
+    if S.currentCharacter ~= 3 and attackPressed and not S.isBlocking and not S.isCharging and not S.chargeReleased then
         Combat.CastSpell()
     end
 
     -- 格挡（鼠标右键长按）
     local blockBtnHeld = S.btnBlock and S.btnBlock.state and S.btnBlock.state.pressed
     local blockHeld = (not mouseOnUI and input:GetMouseButtonDown(MOUSEB_RIGHT)) or input:GetKeyDown(KEY_L) or blockBtnHeld
-    if blockHeld and not S.isBlocking and not S.isAttacking and not S.isCharging and (S.playerMP > 0 or GMConsole.IsInfiniteMP()) then
-        S.isBlocking = true
-        S.currentAnim = C.ANIM_BLOCK
-        S.animFrame = 0
-        S.animTimer = 0.0
-    elseif S.isBlocking and not blockHeld then
-        S.isBlocking = false
+    if S.currentCharacter ~= 3 then
+        if blockHeld and not S.isBlocking and not S.isAttacking and not S.isCharging and (S.playerMP > 0 or GMConsole.IsInfiniteMP()) then
+            S.isBlocking = true
+            S.currentAnim = C.ANIM_BLOCK
+            S.animFrame = 0
+            S.animTimer = 0.0
+        elseif S.isBlocking and not blockHeld then
+            S.isBlocking = false
+        end
     end
     -- 格挡消耗MP
     if S.isBlocking then
@@ -343,13 +428,13 @@ function M.Update(dt)
         end
     end
 
-    -- 蓄力（Q键长按）
+    -- 蓄力（Q键长按）- 角色3无蓄力
     local chargeBtnHeld = S.btnCharge and S.btnCharge.state and S.btnCharge.state.pressed
     local chargeHeld = input:GetKeyDown(KEY_Q) or chargeBtnHeld
     if not S.editorMode then
         local chargeStart = input:GetKeyPress(KEY_Q)
         if chargeBtnHeld and not S.isCharging then chargeStart = true end
-        if chargeStart and not S.isCharging and not S.chargeReleased and not S.isAttacking and not S.isBlocking and not S.isDashing then
+        if S.currentCharacter ~= 3 and chargeStart and not S.isCharging and not S.chargeReleased and not S.isAttacking and not S.isBlocking and not S.isDashing then
             S.isCharging = true
             S.chargeTimer = 0.0
             S.currentAnim = C.ANIM_CHARGE
@@ -398,14 +483,14 @@ function M.Update(dt)
         end
     end
 
-    -- 治愈技能（E键）
+    -- 治愈技能（E键）- 角色3无治愈
     if not S.editorMode then
         if S.healCooldownTimer > 0 then
             S.healCooldownTimer = S.healCooldownTimer - dt
         end
         local healPressed = input:GetKeyPress(KEY_E) or S.healButtonTap
         S.healButtonTap = false
-        if healPressed and not S.isHealing and not S.isCharging and not S.chargeReleased and not S.isAttacking and not S.isBlocking and S.healCooldownTimer <= 0 and (S.playerMP >= C.HEAL_MP_COST or GMConsole.IsInfiniteMP()) then
+        if S.currentCharacter ~= 3 and healPressed and not S.isHealing and not S.isCharging and not S.chargeReleased and not S.isAttacking and not S.isBlocking and S.healCooldownTimer <= 0 and (S.playerMP >= C.HEAL_MP_COST or GMConsole.IsInfiniteMP()) then
             S.isHealing = true
             S.healTimer = 0.0
             S.currentAnim = C.ANIM_HEAL
@@ -437,11 +522,11 @@ function M.Update(dt)
         end
     end
 
-    -- 潜行
+    -- 潜行 - 角色3无蹲下
     if not S.editorMode then
         local crouchHeld = input:GetKeyDown(KEY_S) or input:GetKeyDown(KEY_LSHIFT) or joyCrouchHeld
         local wasCrouching = S.isCrouching
-        if crouchHeld and S.onGround and not S.isCharging and not S.chargeReleased and not S.isHealing and not S.isAttacking then
+        if S.currentCharacter ~= 3 and crouchHeld and S.onGround and not S.isCharging and not S.chargeReleased and not S.isHealing and not S.isAttacking then
             if not wasCrouching then
                 S.isCrouching = true
                 S.crouchPhase = "enter"

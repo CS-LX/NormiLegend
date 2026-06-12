@@ -18,6 +18,13 @@ C.PLAYER_RADIUS = 0.4
 C.HANG_GRAVITY_SCALE = 0.125
 C.MAP_HALF_WIDTH = 30.0
 
+-- 跳跃手感优化（Celeste 风格）
+C.COYOTE_TIME = 0.1          -- 土狼时间（离开地面后仍可跳跃的宽限期）
+C.JUMP_BUFFER_TIME = 0.1     -- 跳跃缓冲（落地前按键的有效窗口）
+C.VAR_JUMP_TIME = 0.2        -- 可变跳跃持续时间（此窗口内松手截断上升）
+C.JUMP_CUT_MULT = 0.75       -- 松手时保留75%上升速度（最短跳≈2m）
+C.JUMP_CUT_GRAVITY = 1.0     -- 截断后正常重力（不额外加速下落）
+
 -- 序列帧
 C.SPRITE_COLS = 4
 C.SPRITE_ROWS = 3
@@ -97,5 +104,24 @@ C.CHAR2_DASH_SPEED = 15.0
 -- 吸血buff
 C.LIFESTEAL_DURATION = 10.0
 C.LIFESTEAL_RATIO = 0.5
+
+-- ============================================================================
+-- 角色策略（CharacterStrategy）
+-- 每种策略定义：默认角色、是否允许切换、可用角色列表
+-- ============================================================================
+C.CharacterStrategy = {
+    -- 正常关卡：固定角色3（蓝白），禁止切换
+    normal = {
+        defaultChar = 3,
+        allowSwitch = false,
+        availableChars = { 3 },
+    },
+    -- 番外篇：默认角色1（冰法师），允许切换全部角色
+    sideStory = {
+        defaultChar = 1,
+        allowSwitch = true,
+        availableChars = { 1, 2, 3 },
+    },
+}
 
 return C

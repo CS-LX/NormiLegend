@@ -59,19 +59,7 @@ function M.HandleRender(eventType, eventData)
 
     nvgBeginFrame(S.nvg, physW, physH, 1.0)
 
-    -- 标题视频页面 / 主菜单 → 不渲染游戏画面（UI 自行处理）
-    -- 例外：预览模式需要渲染地形和玩家；编辑器模式渲染画布贴图
-    if S.showTitleScreen or S.showMainMenu then
-        if TitleMenu.IsPreviewActive() then
-            TitleMenu.DrawPreview(S.nvg, physW, physH)
-        elseif TitleMenu.IsLevelEditorOpen() then
-            TitleMenu.DrawEditorCanvasTextures(S.nvg, physW, physH)
-        end
-        nvgEndFrame(S.nvg)
-        return
-    end
-
-    -- 计算 16:9 安全区域
+    -- 计算 16:9 安全区域（全局统一应用）
     local ox, oy, viewW, viewH = M.CalcLetterbox(physW, physH)
 
     -- 绘制黑色背景（清除非安全区域）
@@ -83,6 +71,20 @@ function M.HandleRender(eventType, eventData)
     -- 将后续所有绘制限制在 16:9 安全区域内
     nvgSave(S.nvg)
     nvgTranslate(S.nvg, ox, oy)
+
+    -- 标题视频页面 / 主菜单 → 不渲染游戏画面（UI 自行处理）
+    -- 例外：预览模式需要渲染地形和玩家；编辑器模式渲染画布贴图
+    if S.showTitleScreen or S.showMainMenu then
+        if TitleMenu.IsPreviewActive() then
+            TitleMenu.DrawPreview(S.nvg, viewW, viewH)
+        elseif TitleMenu.IsLevelEditorOpen() then
+            TitleMenu.DrawEditorCanvasTextures(S.nvg, viewW, viewH)
+        end
+        nvgRestore(S.nvg)
+        nvgEndFrame(S.nvg)
+        return
+    end
+
     -- 传递给子函数的 width/height 就是安全区域尺寸
     local width = viewW
     local height = viewH
@@ -255,6 +257,16 @@ function M.DrawPlatforms(width, height, camX, camY)
         local pw = p.width * C.PIXELS_PER_UNIT * sx
         local ph = p.height * C.PIXELS_PER_UNIT * sy
 
+        -- 旋转支持
+        local rotRad = (p.rotation or 0) * math.pi / 180
+        local hasRot = (rotRad ~= 0)
+        if hasRot then
+            nvgSave(vg)
+            nvgTranslate(vg, px, py)
+            nvgRotate(vg, rotRad)
+            nvgTranslate(vg, -px, -py)
+        end
+
         if S.imgPlatformArea and S.imgPlatformArea > 0 then
             -- 平台图片
             local paint = nvgImagePattern(vg, px - pw / 2, py - ph / 2, pw, ph, 0, S.imgPlatformArea, 1.0)
@@ -277,6 +289,10 @@ function M.DrawPlatforms(width, height, camX, camY)
             nvgStrokeColor(vg, nvgRGBA(200, 170, 80, 200))
             nvgStrokeWidth(vg, 2 * sx)
             nvgStroke(vg)
+        end
+
+        if hasRot then
+            nvgRestore(vg)
         end
     end
 end
@@ -1102,7 +1118,7 @@ function M.DrawSpriteFrame(img, frame, cx, cy, size, flipH)
     local drawW = size
     local drawH = size * (srcH / srcW)
     local oX = crop.offsetX or 0.0
-    local oY = crop.offsetY or 0.6
+    local oY = (crop.offsetY or 0.6) + (S.playerOffsetY or 0.0)
     local drawX = cx - drawW / 2 + oX * drawW
     local drawY = cy - drawH * oY
 

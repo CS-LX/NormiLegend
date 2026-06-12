@@ -160,12 +160,14 @@ function R.DrawEditorCanvasTextures(vg, physW, physH)
         local objCol = obj.color or {255, 255, 255, 255}
         local texLayers = obj.texLayers
 
-        -- 如果有旋转效果，保存变换状态并绕物件中心旋转
-        local hasRotation = (eAngle ~= 0)
+        -- 如果有旋转（静态rotation + 动态效果eAngle），保存变换状态并绕物件中心旋转
+        local objRotRad = (obj.rotation or 0) * math.pi / 180
+        local totalAngle = eAngle + objRotRad
+        local hasRotation = (totalAngle ~= 0)
         if hasRotation then
             nvgSave(vg)
             nvgTranslate(vg, cx, cy)
-            nvgRotate(vg, eAngle)
+            nvgRotate(vg, totalAngle)
             nvgTranslate(vg, -cx, -cy)
         end
 
@@ -203,12 +205,23 @@ function R.DrawEditorCanvasTextures(vg, physW, physH)
                     local alpha = (tLayer.opacity or 1.0) * eAlpha
 
                     if texImg then
+                        -- 贴图独立旋转
+                        local tRot = (tLayer.rotation or 0) * math.pi / 180
+                        if tRot ~= 0 then
+                            nvgSave(vg)
+                            nvgTranslate(vg, cx, cy)
+                            nvgRotate(vg, tRot)
+                            nvgTranslate(vg, -cx, -cy)
+                        end
                         local tintColor = nvgRGBA(objCol[1], objCol[2], objCol[3], math.floor((objCol[4] or 255) * alpha))
                         local paint = nvgImagePatternTinted(vg, cx - drawW/2, cy - drawH/2, drawW, drawH, 0, texImg, tintColor)
                         nvgBeginPath(vg)
                         nvgRect(vg, cx - drawW/2, cy - drawH/2, drawW, drawH)
                         nvgFillPaint(vg, paint)
                         nvgFill(vg)
+                        if tRot ~= 0 then
+                            nvgRestore(vg)
+                        end
                     end
                 end
             end
@@ -383,6 +396,37 @@ function R.DrawEditorCanvasTextures(vg, physW, physH)
         nvgTextAlign(vg, NVG_ALIGN_RIGHT + NVG_ALIGN_BOTTOM)
         nvgFillColor(vg, nvgRGBA(80, 220, 255, 200))
         nvgText(vg, vsx + vsw - 2 * dpr, vsy - 2 * dpr, "单屏视野")
+    end
+
+    -- ====== 玩家出生点标记（绿色十字 + 圆圈） ======
+    if levelEditor_.playerStartX and levelEditor_.playerStartY then
+        local spX = levelEditor_.playerStartX
+        local spY = levelEditor_.playerStartY  -- 已是编辑器坐标Y-down
+        local spPx, spPy = EditorState.WorldToCanvas(spX, spY, 0, 0)
+        local sSx = canvasX + spPx * dpr
+        local sSy = canvasY + spPy * dpr
+        local markR = 8 * dpr
+        -- 圆圈
+        nvgBeginPath(vg)
+        nvgCircle(vg, sSx, sSy, markR)
+        nvgStrokeColor(vg, nvgRGBA(50, 255, 100, 220))
+        nvgStrokeWidth(vg, 2.0 * dpr)
+        nvgStroke(vg)
+        -- 十字
+        nvgBeginPath(vg)
+        nvgMoveTo(vg, sSx - markR, sSy)
+        nvgLineTo(vg, sSx + markR, sSy)
+        nvgMoveTo(vg, sSx, sSy - markR)
+        nvgLineTo(vg, sSx, sSy + markR)
+        nvgStrokeColor(vg, nvgRGBA(50, 255, 100, 220))
+        nvgStrokeWidth(vg, 1.5 * dpr)
+        nvgStroke(vg)
+        -- 标签
+        nvgFontSize(vg, 9 * dpr)
+        nvgFontFace(vg, "sans")
+        nvgTextAlign(vg, NVG_ALIGN_CENTER + NVG_ALIGN_BOTTOM)
+        nvgFillColor(vg, nvgRGBA(50, 255, 100, 200))
+        nvgText(vg, sSx, sSy - markR - 2 * dpr, "出生点")
     end
 
     nvgRestore(vg) -- 恢复裁剪

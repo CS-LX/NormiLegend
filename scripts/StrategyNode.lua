@@ -64,6 +64,13 @@ M.NODE_TYPES = {
     dialog     = { label = "弹出对话",  color = {100, 180, 220}, category = "动作",   desc = "显示剧情/提示文字", icon = "💬" },
     damage     = { label = "伤害/治疗", color = {220, 70, 70},   category = "动作",   desc = "对玩家造成伤害或治疗", icon = "♥" },
     win_level  = { label = "胜负判定",  color = {60, 200, 60},   category = "动作",   desc = "过关成功/失败", icon = "🏆" },
+    camera_zoom= { label = "镜头缩放",  color = {100, 160, 220}, category = "动作",   desc = "平滑缩放相机视野", icon = "🔍" },
+    modify_item= { label = "修改物品",  color = {220, 180, 50},  category = "动作",   desc = "增减玩家物品数量", icon = "📦" },
+    set_ability= { label = "设置能力",  color = {140, 200, 80},  category = "动作",   desc = "启用/禁用玩家能力", icon = "⚡" },
+    destroy_self={ label = "销毁自身", color = {180, 60, 60},   category = "动作",   desc = "销毁触发此策略的对象", icon = "💥" },
+
+    -- === 数据(物品) ===
+    read_item  = { label = "读取物品",  color = {200, 170, 50},  category = "数据",   desc = "读取玩家物品数量", icon = "🔎" },
 }
 
 -- ============================================================================
@@ -150,6 +157,26 @@ M.PORT_DEFS = {
         outputs = { { name = "▶", type = "flow", field = "outputNode" } },
     },
     win_level = {
+        inputs = { { name = "▶", type = "flow" } },
+        outputs = {},
+    },
+    camera_zoom = {
+        inputs = { { name = "▶", type = "flow" }, { name = "缩放", type = "number", field = "zoomLevel" } },
+        outputs = { { name = "▶", type = "flow", field = "outputNode" } },
+    },
+    read_item = {
+        inputs = {},
+        outputs = { { name = "数量", type = "number" } },
+    },
+    modify_item = {
+        inputs = { { name = "▶", type = "flow" }, { name = "数量", type = "number", field = "itemAmount" } },
+        outputs = { { name = "▶", type = "flow", field = "outputNode" } },
+    },
+    set_ability = {
+        inputs = { { name = "▶", type = "flow" } },
+        outputs = { { name = "▶", type = "flow", field = "outputNode" } },
+    },
+    destroy_self = {
         inputs = { { name = "▶", type = "flow" } },
         outputs = {},
     },
@@ -270,6 +297,23 @@ M.WIN_TYPES = {
     { id = "restart", label = "重新开始" },
 }
 
+-- 物品类型
+M.ITEM_TYPES = {
+    { id = "light_fragment", label = "光的碎片" },
+}
+
+-- 物品操作类型
+M.ITEM_OPS = {
+    { id = "add",    label = "增加" },
+    { id = "remove", label = "减少" },
+    { id = "set",    label = "设为" },
+}
+
+-- 玩家能力类型
+M.ABILITY_TYPES = {
+    { id = "hang_glide", label = "滞空滑翔" },
+}
+
 -- ============================================================================
 -- Inspector 属性定义（每种节点的可编辑属性）
 -- ============================================================================
@@ -344,6 +388,23 @@ M.INSPECTOR_FIELDS = {
     win_level = {
         { key = "winType", label = "结果", type = "select", options = "WIN_TYPES", default = "win" },
     },
+    camera_zoom = {
+        { key = "zoomScale", label = "缩放倍数", type = "float", min = 0.1, max = 5.0, step = 0.1, default = 1.0 },
+        { key = "zoomDuration", label = "过渡时间(秒)", type = "float", min = 0, max = 10, step = 0.1, default = 0.5 },
+        { key = "zoomEase", label = "缓动", type = "select", options = "EASE_TYPES", default = "easeOut" },
+    },
+    read_item = {
+        { key = "itemName", label = "物品类型", type = "select", options = "ITEM_TYPES", default = "light_fragment" },
+    },
+    modify_item = {
+        { key = "itemName", label = "物品类型", type = "select", options = "ITEM_TYPES", default = "light_fragment" },
+        { key = "itemOp", label = "操作", type = "select", options = "ITEM_OPS", default = "add" },
+    },
+    set_ability = {
+        { key = "abilityName", label = "能力", type = "select", options = "ABILITY_TYPES", default = "hang_glide" },
+        { key = "abilityEnabled", label = "启用", type = "bool", default = true },
+    },
+    destroy_self = {},
 }
 
 -- ============================================================================
@@ -375,6 +436,11 @@ local NODE_DEFAULTS = {
     dialog    = { dialogText = "你好！", dialogStyle = "popup", dialogDuration = 3.0, dialogSpeaker = "", textInput = nil, outputNode = nil },
     damage    = { damageAmount = 10, damageIsHeal = false, amount = nil, outputNode = nil },
     win_level = { winType = "win" },
+    camera_zoom = { zoomScale = 1.0, zoomDuration = 0.5, zoomEase = "easeOut", zoomLevel = nil, outputNode = nil },
+    read_item   = { itemName = "light_fragment" },
+    modify_item = { itemName = "light_fragment", itemOp = "add", itemAmount = nil, outputNode = nil },
+    set_ability = { abilityName = "hang_glide", abilityEnabled = true, outputNode = nil },
+    destroy_self= {},
 }
 
 ---@param nodeType string
@@ -599,6 +665,9 @@ function M.Evaluate(tree, nodeId, context)
         return node.strValue or ""
     elseif t == "param" then
         return (context.params or {})[node.paramName] or 0.0
+    elseif t == "read_item" then
+        local items = (context.params or {})._items or {}
+        return items[node.itemName] or 0
     elseif t == "compare" then
         local l = tonumber(M.Evaluate(tree, node.left, context)) or 0
         local r = tonumber(M.Evaluate(tree, node.right, context)) or 0
@@ -710,7 +779,8 @@ function M._collectActions(tree, nodeId, context, actions)
         M._collectActions(tree, children[#children], context, actions)
     elseif t == "delay" or t == "repeat_n" or t == "spawn" or t == "move_obj"
         or t == "set_var" or t == "play_fx" or t == "dialog"
-        or t == "damage" or t == "win_level" then
+        or t == "damage" or t == "win_level" or t == "camera_zoom"
+        or t == "modify_item" or t == "set_ability" or t == "destroy_self" then
         -- 动作节点: 收集自身，然后继续
         table.insert(actions, { nodeType = t, node = node })
         if node.outputNode then

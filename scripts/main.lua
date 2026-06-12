@@ -54,12 +54,12 @@ function Start()
     -- 创建虚拟控制（HUD按钮）
     Player.CreateGameHUD()
 
-    -- 初始化UI系统
+    -- 初始化UI系统（固定 16:9 设计分辨率 1920×1080）
     UI.Init({
         fonts = {
             { family = "sans", weights = { normal = "Fonts/XiangcuiDengcusong.ttf" } }
         },
-        scale = UI.Scale.DEFAULT,
+        scale = UI.Scale.DESIGN_RESOLUTION(1920, 1080),
     })
 
     -- 初始化自定义鼠标指针
@@ -265,11 +265,19 @@ function Start()
     }
     Player.RefreshCharSwitchPanel()
 
-    -- 建立共享根节点
+    -- 建立共享根节点（外层全屏居中容器 + 内层 16:9 安全区域）
     local uiRoot = UI.Panel {
         width = "100%", height = "100%",
+        justifyContent = "center", alignItems = "center",
         pointerEvents = "box-none",
-        children = { S.backButton, S.topButtonBar, S.mapBackButton, S.skillButtonPanel, S.charSwitchPanel, S.skillPanelUI, S.inventoryPanelUI, S.escPopupUI, SpriteEditor.GetPanel() }
+        children = {
+            UI.Panel {
+                width = 1920, height = 1080,
+                pointerEvents = "box-none",
+                overflow = "hidden",
+                children = { S.backButton, S.topButtonBar, S.mapBackButton, S.skillButtonPanel, S.charSwitchPanel, S.skillPanelUI, S.inventoryPanelUI, S.escPopupUI, SpriteEditor.GetPanel() }
+            }
+        }
     }
     UI.SetRoot(uiRoot)
 
@@ -408,6 +416,9 @@ function HandleUpdate(eventType, eventData)
     -- 章节选择动画更新
     TitleMenu.UpdateChapterSelect(dt)
 
+    -- 关卡选择背景动画更新
+    TitleMenu.UpdateLevelSelect(dt)
+
     -- 关卡编辑器拖拽更新
     TitleMenu.UpdateLevelEditor(dt)
 
@@ -443,7 +454,7 @@ function HandleUpdate(eventType, eventData)
     if S.backButton then S.backButton:SetVisible(showHud) end
     if S.topButtonBar then S.topButtonBar:SetVisible(showHud) end
     if S.skillButtonPanel then S.skillButtonPanel:SetVisible(showHud) end
-    if S.charSwitchPanel then S.charSwitchPanel:SetVisible(showHud) end
+    if S.charSwitchPanel then S.charSwitchPanel:SetVisible(showHud and S.currentCharStrategy.allowSwitch) end
     if S.mapBackButton then S.mapBackButton:SetVisible(WorldMap.IsOnMap()) end
 
     -- ========== 大地图状态处理 ==========

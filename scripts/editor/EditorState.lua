@@ -48,6 +48,7 @@ M.state = {
     undoStack = {},            -- 保存操作前的对象列表快照
     maxUndo = 50,              -- 最大撤销步数
     -- 预览模式
+    previewShowColliders = false,  -- Tab 切换：是否显示碰撞箱（默认隐藏）
     previewActive = false,
     previewScene = nil,
     previewPlayerNode = nil,
@@ -93,6 +94,9 @@ M.state = {
     cameraBounds = { x = 2, y = 1, w = 26, h = 15.5 },
     cameraBoundsEnabled = true, -- 是否启用镜头范围限制（默认开启预览）
     playerRenderScale = 1.0,   -- 角色渲染倍率（乘以动画 scale，1.0=原始大小）
+    playerOffsetY = 0.0,       -- 角色垂直偏移（正数=下移贴地，负数=上移，叠加到 animCropConfig.offsetY）
+    playerStartX = nil,        -- 玩家初始X位置（nil=自动计算，放在最高平台上方）
+    playerStartY = nil,        -- 玩家初始Y位置（nil=自动计算）编辑器坐标Y-down
     camBoundsSelected = false,  -- inspector 中是否选中镜头范围框（选中才可编辑）
     -- 镜头范围框拖拽
     camBoundsDragging = false,

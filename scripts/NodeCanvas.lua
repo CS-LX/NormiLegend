@@ -427,7 +427,9 @@ local function getNodeContentLines(node)
     end
     if node.type == "spawn" or node.type == "play_fx" or node.type == "dialog"
        or node.type == "delay" or node.type == "repeat_n" or node.type == "win_level"
-       or node.type == "set_var" or node.type == "damage" then
+       or node.type == "set_var" or node.type == "damage" or node.type == "camera_zoom"
+       or node.type == "read_item" or node.type == "modify_item"
+       or node.type == "set_ability" or node.type == "destroy_self" then
         return 1
     end
     return 0
@@ -683,11 +685,11 @@ end
 -- ============================================================================
 
 local MENU_CATEGORIES = {
-    { name = "数据",   types = { "value", "string", "param" } },
+    { name = "数据",   types = { "value", "string", "param", "read_item" } },
     { name = "条件",   types = { "compare", "logic" } },
     { name = "运算",   types = { "math", "concat" } },
     { name = "流程",   types = { "branch", "sequence", "random", "delay", "repeat_n" } },
-    { name = "动作",   types = { "spawn", "move_obj", "set_var", "play_fx", "dialog", "damage", "win_level" } },
+    { name = "动作",   types = { "spawn", "move_obj", "set_var", "play_fx", "dialog", "damage", "win_level", "camera_zoom", "modify_item", "set_ability", "destroy_self" } },
 }
 
 local MENU_ITEM_H = 36
@@ -1030,6 +1032,28 @@ function M._getNodeSummary(node)
     if t == "damage" then
         local prefix = node.damageIsHeal and "+" or "-"
         return prefix .. tostring(node.damageAmount or 10) .. " HP"
+    end
+    if t == "camera_zoom" then
+        return tostring(node.zoomScale or 1.0) .. "x"
+    end
+    if t == "read_item" then
+        for _, it in ipairs(SN.ITEM_TYPES) do if it.id == node.itemName then return "$" .. it.label end end
+        return "$" .. (node.itemName or "?")
+    end
+    if t == "modify_item" then
+        local opLabel = node.itemOp or "add"
+        for _, o in ipairs(SN.ITEM_OPS) do if o.id == node.itemOp then opLabel = o.label; break end end
+        local itemLabel = node.itemName or "?"
+        for _, it in ipairs(SN.ITEM_TYPES) do if it.id == node.itemName then itemLabel = it.label; break end end
+        return opLabel .. " " .. itemLabel
+    end
+    if t == "set_ability" then
+        local abilLabel = node.abilityName or "?"
+        for _, a in ipairs(SN.ABILITY_TYPES) do if a.id == node.abilityName then abilLabel = a.label; break end end
+        return (node.abilityEnabled and "启用" or "禁用") .. " " .. abilLabel
+    end
+    if t == "destroy_self" then
+        return "销毁自身"
     end
     return nil
 end

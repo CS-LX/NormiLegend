@@ -12,6 +12,7 @@ local C = require("GameConfig")
 local UI = require("urhox-libs/UI")
 local NodeCanvas = require("NodeCanvas")
 local EditorState = require("editor.EditorState")
+local ChapterBg = require("menu.ChapterBg")
 
 local M = {}
 local MenuFlow = require("menu.MenuFlow")
@@ -82,12 +83,8 @@ function M.ShowLevelSelect(chapterIdx)
     local chapName = CHAPTER_DATA[chapterIdx] and CHAPTER_DATA[chapterIdx].name or ("第" .. chapterIdx .. "章")
     local chapColor = CHAPTER_DATA[chapterIdx] and CHAPTER_DATA[chapterIdx].color or {100, 100, 100, 255}
 
-    -- 背景
-    local bg = UI.Panel {
-        position = "absolute", top = 0, left = 0,
-        width = "100%", height = "100%",
-        backgroundColor = {20, 18, 35, 250},
-    }
+    -- 背景：赛博宗教风格动态转场
+    local bg = ChapterBg.Create()
 
     -- 顶部栏（标题 + 返回按钮）
     local topBar = UI.Panel {
@@ -227,10 +224,17 @@ end
 function M.CloseLevelSelect()
     levelSelect_.active = false
     levelSelect_.editorActive = false
+    ChapterBg.Destroy()
     if levelSelect_.uiRoot then
         levelSelect_.uiRoot:Destroy()
         levelSelect_.uiRoot = nil
     end
+end
+
+--- 关卡选择背景动画更新（每帧调用）
+function M.UpdateLevelSelect(dt)
+    if not levelSelect_.active then return end
+    ChapterBg.Update(dt)
 end
 
 --- 关卡选择页面是否打开
@@ -313,10 +317,47 @@ function M.EnterLevelEditor(chapterIdx, levelIdx)
     end
     -- 地图素材文件夹（按前缀自动分类：背景→bg, 平台→tile）
     -- 放在 if 外面，确保已有关卡数据也能补充新素材（ImportTexture 内部已去重）
-    M.ImportTexture("image/地图素材/背景-时隙废墟-中.png", "时隙废墟-中", "bg")
-    M.ImportTexture("image/地图素材/背景-时隙废墟-远.png", "时隙废墟-远", "bg")
-    M.ImportTexture("image/地图素材/背景-时隙废墟-远近.png", "时隙废墟-远近", "bg")
-    M.ImportTexture("image/地图素材/平台-镂空平台.png", "镂空平台", "tile")
+    local mapAssets = {
+        -- 平台素材
+        "平台-秋叶",
+        "平台-花",
+        "平台-蓝白",
+        "平台-镂空平台",
+        "平台-镂空平台浅",
+        "平台-镂空平台深",
+        -- 背景素材
+        "背景-斜线淡绿",
+        "背景-时隙废墟-上",
+        "背景-时隙废墟-中",
+        "背景-时隙废墟-近",
+        "背景-时隙废墟-远",
+        "背景-时隙废墟-阴",
+        "背景-楼梯",
+        "背景-正弦飞鸟",
+        "背景-破碎时空",
+        "背景-神像-无花",
+        "背景-神像-有花",
+        "背景-空境花园-中",
+        "背景-空境花园-近",
+        "背景-空境花园-远",
+        "背景-花",
+        "背景-解密1-近",
+        "背景-解密1-远",
+    }
+    for _, name in ipairs(mapAssets) do
+        ---@type string
+        local cat = "other"
+        ---@type string
+        local displayName = name
+        if name:find("^平台%-") then
+            cat = "tile"
+            displayName = name:sub(#"平台-" + 1)  -- 去掉"平台-"前缀
+        elseif name:find("^背景%-") then
+            cat = "bg"
+            displayName = name:sub(#"背景-" + 1)  -- 去掉"背景-"前缀
+        end
+        M.ImportTexture("image/地图素材/" .. name .. ".png", displayName, cat)
+    end
     -- 纯色素材
     M.ImportTexture("image/白色.png", "白色", "solid")
     M.ImportTexture("image/透明.png", "透明", "solid")
@@ -565,23 +606,31 @@ function M.OpenEditorFromGame(chapterIdx, levelIdx)
     -- 设置编辑器模式标志（阻止游戏输入处理）
     S.editorMode = true
 
-    -- 先创建编辑器容器根节点（BuildLevelEditorUI 会将 uiRoot 挂载到此）
+    -- 先创建编辑器容器根节点（16:9 安全区域 + BuildLevelEditorUI 会将 uiRoot 挂载到此）
     local editorGameRoot = UI.Panel {
         width = "100%", height = "100%",
+        justifyContent = "center", alignItems = "center",
         pointerEvents = "box-none",
         children = {
-            UI.Button {
-                text = "返回游戏", fontSize = 12,
-                position = "absolute", bottom = 16, right = 16,
-                zIndex = 100,
-                width = 80, height = 34,
-                backgroundColor = {180, 60, 60, 220},
-                color = "#ffffff",
-                borderRadius = 8,
-                borderWidth = 1, borderColor = {255, 100, 100, 180},
-                onClick = function()
-                    M.CloseEditorToGame()
-                end,
+            UI.Panel {
+                width = 1920, height = 1080,
+                pointerEvents = "box-none",
+                overflow = "hidden",
+                children = {
+                    UI.Button {
+                        text = "返回游戏", fontSize = 12,
+                        position = "absolute", bottom = 16, right = 16,
+                        zIndex = 100,
+                        width = 80, height = 34,
+                        backgroundColor = {180, 60, 60, 220},
+                        color = "#ffffff",
+                        borderRadius = 8,
+                        borderWidth = 1, borderColor = {255, 100, 100, 180},
+                        onClick = function()
+                            M.CloseEditorToGame()
+                        end,
+                    },
+                },
             },
         },
     }
@@ -655,6 +704,7 @@ function M.PushUndoState()
                     scaleH = layer.scaleH,
                     visible = layer.visible,
                     lockAspect = layer.lockAspect,
+                    rotation = layer.rotation,
                 })
             end
             copy.selectedTexLayer = obj.selectedTexLayer
@@ -698,7 +748,34 @@ function M.PushUndoState()
         end
         snapshot[i] = copy
     end
-    table.insert(levelEditor_.undoStack, { key = key, objects = snapshot, selectedObj = levelEditor_.selectedObj })
+    -- 深拷贝背景图层列表
+    local bgSnapshot = {}
+    if levelEditor_.bgLayers then
+        for _, bg in ipairs(levelEditor_.bgLayers) do
+            local bgCopy = {
+                path = bg.path, name = bg.name, opacity = bg.opacity,
+                x = bg.x, y = bg.y, w = bg.w, h = bg.h,
+                depth = bg.depth, visible = bg.visible, lockAspect = bg.lockAspect,
+            }
+            -- 背景图层动态效果
+            if bg.effects and #bg.effects > 0 then
+                bgCopy.effects = {}
+                for _, eff in ipairs(bg.effects) do
+                    local p = {}
+                    if eff.params then for k, v in pairs(eff.params) do p[k] = v end end
+                    table.insert(bgCopy.effects, { id = eff.id, params = p })
+                end
+            end
+            table.insert(bgSnapshot, bgCopy)
+        end
+    end
+
+    table.insert(levelEditor_.undoStack, {
+        key = key, objects = snapshot, selectedObj = levelEditor_.selectedObj,
+        bgLayers = bgSnapshot, selectedBgLayer = levelEditor_.selectedBgLayer,
+        playerStartX = levelEditor_.playerStartX,
+        playerStartY = levelEditor_.playerStartY,
+    })
     -- 限制栈大小
     if #levelEditor_.undoStack > levelEditor_.maxUndo then
         table.remove(levelEditor_.undoStack, 1)
@@ -711,6 +788,14 @@ function M.UndoLevelEditor()
     local state = table.remove(levelEditor_.undoStack)
     levelEditor_.objects[state.key] = state.objects
     levelEditor_.selectedObj = state.selectedObj
+    -- 恢复背景图层
+    if state.bgLayers then
+        levelEditor_.bgLayers = state.bgLayers
+        levelEditor_.selectedBgLayer = state.selectedBgLayer
+    end
+    -- 恢复玩家初始位置
+    levelEditor_.playerStartX = state.playerStartX
+    levelEditor_.playerStartY = state.playerStartY
     M.BuildLevelEditorUI()
 end
 
@@ -1549,6 +1634,10 @@ function M.ExportLevelTerrainData(silent)
             h = obj.h,
             name = obj.name or "",
         }
+        -- 旋转角度（非零时才保存）
+        if obj.rotation and obj.rotation ~= 0 then
+            o.rotation = obj.rotation
+        end
         -- 颜色
         if obj.color then
             o.color = obj.color  -- {r, g, b, a}
@@ -1563,6 +1652,7 @@ function M.ExportLevelTerrainData(silent)
                     opacity = layer.opacity,
                     scaleW = layer.scaleW,
                     scaleH = layer.scaleH,
+                    rotation = layer.rotation or 0,
                     visible = layer.visible,
                     lockAspect = layer.lockAspect or false,
                 })
@@ -1614,7 +1704,7 @@ function M.ExportLevelTerrainData(silent)
     local serializedBgLayers = {}
     if levelEditor_.bgLayers then
         for _, bg in ipairs(levelEditor_.bgLayers) do
-            table.insert(serializedBgLayers, {
+            local bgEntry = {
                 path = bg.path,
                 name = bg.name,
                 opacity = bg.opacity,
@@ -1625,7 +1715,17 @@ function M.ExportLevelTerrainData(silent)
                 depth = bg.depth,
                 visible = bg.visible,
                 lockAspect = bg.lockAspect or false,
-            })
+            }
+            -- 序列化动态效果
+            if bg.effects and #bg.effects > 0 then
+                bgEntry.effects = {}
+                for _, eff in ipairs(bg.effects) do
+                    local p = {}
+                    if eff.params then for k, v in pairs(eff.params) do p[k] = v end end
+                    table.insert(bgEntry.effects, { id = eff.id, params = p })
+                end
+            end
+            table.insert(serializedBgLayers, bgEntry)
         end
     end
 
@@ -1679,6 +1779,11 @@ function M.ExportLevelTerrainData(silent)
         },
         -- 角色渲染倍率
         playerRenderScale = levelEditor_.playerRenderScale or 1.0,
+        -- 角色垂直偏移
+        playerOffsetY = levelEditor_.playerOffsetY or 0.0,
+        -- 玩家初始位置（nil时不写入，预览时自动计算）
+        playerStartX = levelEditor_.playerStartX,
+        playerStartY = levelEditor_.playerStartY,
         -- 地形物件
         objects = serializedObjects,
         -- 背景图层
@@ -1843,6 +1948,15 @@ function M.ImportLevelData(filePath)
         levelEditor_.playerRenderScale = data.playerRenderScale
     end
 
+    -- 还原角色垂直偏移
+    if data.playerOffsetY then
+        levelEditor_.playerOffsetY = data.playerOffsetY
+    end
+
+    -- 还原玩家初始位置
+    levelEditor_.playerStartX = data.playerStartX  -- nil表示自动
+    levelEditor_.playerStartY = data.playerStartY
+
     -- 还原物件列表
     if data.objects then
         local objects = {}
@@ -1855,6 +1969,10 @@ function M.ImportLevelData(filePath)
                 h = o.h or 1,
                 name = o.name or "",
             }
+            -- 旋转角度
+            if o.rotation and o.rotation ~= 0 then
+                obj.rotation = o.rotation
+            end
             -- 颜色
             if o.color then
                 obj.color = o.color
@@ -1869,6 +1987,7 @@ function M.ImportLevelData(filePath)
                         opacity = tl.opacity or 1.0,
                         scaleW = tl.scaleW or 1.0,
                         scaleH = tl.scaleH or 1.0,
+                        rotation = tl.rotation or 0,
                         visible = tl.visible ~= false,
                         lockAspect = tl.lockAspect or false,
                     })
@@ -1909,7 +2028,7 @@ function M.ImportLevelData(filePath)
     if data.bgLayers then
         levelEditor_.bgLayers = {}
         for _, bg in ipairs(data.bgLayers) do
-            table.insert(levelEditor_.bgLayers, {
+            local entry = {
                 path = bg.path,
                 name = bg.name,
                 opacity = bg.opacity or 1.0,
@@ -1920,7 +2039,18 @@ function M.ImportLevelData(filePath)
                 depth = bg.depth or 0,
                 visible = bg.visible ~= false,
                 lockAspect = bg.lockAspect or false,
-            })
+                locked = true,  -- 重新进入编辑器时默认锁定，防止误操作
+            }
+            -- 还原动态效果
+            if bg.effects and #bg.effects > 0 then
+                entry.effects = {}
+                for _, eff in ipairs(bg.effects) do
+                    local p = {}
+                    if eff.params then for k, v in pairs(eff.params) do p[k] = v end end
+                    table.insert(entry.effects, { id = eff.id, params = p })
+                end
+            end
+            table.insert(levelEditor_.bgLayers, entry)
         end
         levelEditor_.selectedBgLayer = nil
     end
