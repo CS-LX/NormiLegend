@@ -311,10 +311,20 @@ function M.EnterLevelEditor(chapterIdx, levelIdx)
         M.ImportTexture("image/ice_bg_far_20260602111146.png", "冰原远景", "bg")
         M.ImportTexture("image/克莱因蓝1.png", "克莱因蓝1", "bg")
         M.ImportTexture("image/城堡蓝图背景.jpg", "城堡蓝图背景", "bg")
-        M.ImportTexture("image/transition_1.png", "过渡1", "tile")
-        M.ImportTexture("image/transition_2.png", "过渡2", "tile")
-        M.ImportTexture("image/transition_3.png", "过渡3", "tile")
     end
+    -- 序列帧素材（放在 if 外面，确保已有数据也能补充；ImportTexture 内部去重）
+    M.ImportTexture("image/小鸟序列帧精灵图.png", "小鸟序列帧精灵图", "seq")
+    -- 修正已有记录的分类（可能之前导入为其他分类）
+    for _, tex in ipairs(levelEditor_.customTextures) do
+        if tex.path == "image/小鸟序列帧精灵图.png" and tex.cat ~= "seq" then
+            tex.cat = "seq"
+        end
+    end
+    -- 光之祭坛素材（前缀"交互-" → interact 分类）
+    M.ImportTexture("image/光之祭坛/交互-祭坛底座.png", "祭坛底座", "interact")
+    M.ImportTexture("image/光之祭坛/交互-祭坛核心.png", "祭坛核心", "interact")
+    M.ImportTexture("image/光之祭坛/交互-祭坛碎片.png", "祭坛碎片", "interact")
+    M.ImportTexture("image/光之祭坛/交互-祭坛核心完整.png", "祭坛核心完整", "interact")
     -- 地图素材文件夹（按前缀自动分类：背景→bg, 平台→tile）
     -- 放在 if 外面，确保已有关卡数据也能补充新素材（ImportTexture 内部已去重）
     local mapAssets = {
@@ -855,6 +865,57 @@ function M.UpdateLevelEditor(dt)
         return
     end
 
+    -- WASD 键盘平移画布（TextField 聚焦时不触发）
+    local focusedWidget = UI.GetFocus()
+    local isTextInput = focusedWidget and focusedWidget.OnTextInput and focusedWidget.state and focusedWidget.state.focused
+    if not isTextInput then
+        local panSpeed = 300 * dt  -- 像素/秒
+        local panChanged = false
+        if input:GetKeyDown(KEY_W) then
+            levelEditor_.canvasPanY = (levelEditor_.canvasPanY or 0) + panSpeed
+            panChanged = true
+        end
+        if input:GetKeyDown(KEY_S) then
+            levelEditor_.canvasPanY = (levelEditor_.canvasPanY or 0) - panSpeed
+            panChanged = true
+        end
+        if input:GetKeyDown(KEY_A) then
+            levelEditor_.canvasPanX = (levelEditor_.canvasPanX or 0) + panSpeed
+            panChanged = true
+        end
+        if input:GetKeyDown(KEY_D) then
+            levelEditor_.canvasPanX = (levelEditor_.canvasPanX or 0) - panSpeed
+            panChanged = true
+        end
+        if panChanged and levelEditor_.uiRoot then
+            local contentPanel = levelEditor_.uiRoot:FindById("canvas_content")
+            if contentPanel then
+                contentPanel:SetStyle({ left = levelEditor_.canvasPanX, top = levelEditor_.canvasPanY })
+            end
+        end
+    end
+
+    -- 每帧更新鼠标世界坐标显示
+    if levelEditor_.uiRoot then
+        local coordLabel = levelEditor_.uiRoot:FindById("canvas_mouse_coord")
+        if coordLabel then
+            local dpr = graphics:GetDPR()
+            local mx = input.mousePosition.x / dpr
+            local my = input.mousePosition.y / dpr
+            local margin = 8
+            local toolbarH = 50
+            local panX = levelEditor_.canvasPanX or 0
+            local panY = levelEditor_.canvasPanY or 0
+            local canvasMouseX = mx - margin - panX
+            local canvasMouseY = my - (toolbarH + margin) - panY
+            local gridSize = levelEditor_.gridSize or 40
+            local worldH = levelEditor_.worldH or 17.5
+            local wx = canvasMouseX / gridSize
+            local wy = worldH - (canvasMouseY / gridSize)
+            coordLabel:SetText(string.format("世界坐标: (%.2f, %.2f)", wx, wy))
+        end
+    end
+
     -- Ctrl+Z 撤销
     if input:GetKeyDown(KEY_CTRL) and input:GetKeyPress(KEY_Z) then
         M.UndoLevelEditor()
@@ -943,12 +1004,22 @@ function M.UpdateLevelEditor(dt)
                 copy.triggerMethod = src.triggerMethod
                 copy.triggerMethodDesc = src.triggerMethodDesc
                 if src.mappings then copy.mappings = {} end
+                -- 深拷贝策略节点树
+                if src.triggerStrategy and src.triggerStrategy.rootId then
+                    local SN = require("StrategyNode")
+                    copy.triggerStrategy = SN.Deserialize(SN.Serialize(src.triggerStrategy))
+                end
             end
             -- 执行器专有
             if src.type == "executor" then
                 copy.executorEffect = src.executorEffect
                 copy.executorEffectDesc = src.executorEffectDesc
                 copy.hasCollision = src.hasCollision
+                -- 深拷贝策略节点树
+                if src.executorStrategy and src.executorStrategy.rootId then
+                    local SN = require("StrategyNode")
+                    copy.executorStrategy = SN.Deserialize(SN.Serialize(src.executorStrategy))
+                end
             end
             table.insert(objs, copy)
             levelEditor_.selectedObj = #objs
@@ -1809,6 +1880,32 @@ function M.ExportLevelTerrainData(silent)
         print("[LEVEL EXPORT] 写入文件失败: " .. filePath)
     end
 
+    -- 同步保存预制体库数据
+    do
+        local Prefab = require("editor.Prefab")
+        local prefabList = Prefab.ListPrefabs()
+        if #prefabList > 0 then
+            local allPrefabs = {}
+            for _, pInfo in ipairs(prefabList) do
+                local data = Prefab.LoadPrefab(pInfo.filePath)
+                if data then
+                    allPrefabs[#allPrefabs + 1] = data
+                end
+            end
+            if #allPrefabs > 0 then
+                local prefabJson = cjson.encode({ version = 1, prefabs = allPrefabs })
+                fileSystem:CreateDir("levels")
+                local pfPath = "levels/prefabs_library.json"
+                local pfFile = File(pfPath, FILE_WRITE)
+                if pfFile:IsOpen() then
+                    pfFile:WriteString(prefabJson)
+                    pfFile:Close()
+                    print("[LEVEL EXPORT] 预制体库已同步保存: " .. pfPath .. " (" .. #allPrefabs .. " 个)")
+                end
+            end
+        end
+    end
+
     -- 打印到控制台（带明确标记，便于AI检索）
     print("===LEVEL_EXPORT_START===")
     print(exportJson)
@@ -2078,6 +2175,47 @@ function M.ImportLevelData(filePath)
             if data.levelMeta.timeLimit then ld.timeLimit = data.levelMeta.timeLimit end
             if data.levelMeta.reward then ld.reward = data.levelMeta.reward end
             if data.levelMeta.description then ld.description = data.levelMeta.description end
+        end
+    end
+
+    -- 还原预制体库数据（从 prefabs_library.json 恢复到虚拟FS）
+    do
+        local Prefab = require("editor.Prefab")
+        local pfPath = "levels/prefabs_library.json"
+        local pfJson = nil
+        if fileSystem:FileExists(pfPath) then
+            local pfFile = File(pfPath, FILE_READ)
+            if pfFile and pfFile:IsOpen() then
+                pfJson = pfFile:ReadString()
+                pfFile:Close()
+            end
+        end
+        if not pfJson and cache:Exists(pfPath) then
+            local pfFile = cache:GetFile(pfPath)
+            if pfFile and pfFile:IsOpen() then
+                pfJson = pfFile:ReadString()
+                pfFile:Close()
+            end
+        end
+        if pfJson then
+            local pOk, pData = pcall(cjson.decode, pfJson)
+            if pOk and pData and pData.prefabs then
+                fileSystem:CreateDir(Prefab.PREFAB_DIR)
+                local count = 0
+                for _, prefabData in ipairs(pData.prefabs) do
+                    local name = prefabData.name or ("prefab_" .. count)
+                    local pfFilePath = Prefab.PREFAB_DIR .. "/" .. name .. ".prefab.json"
+                    local wf = File(pfFilePath, FILE_WRITE)
+                    if wf:IsOpen() then
+                        wf:WriteString(cjson.encode(prefabData))
+                        wf:Close()
+                        count = count + 1
+                    end
+                end
+                if count > 0 then
+                    print("[LEVEL IMPORT] 预制体库已恢复: " .. count .. " 个")
+                end
+            end
         end
     end
 

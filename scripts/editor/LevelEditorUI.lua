@@ -90,6 +90,11 @@ function M.BuildLevelEditorUI()
             onClick = function()
                 levelEditor_.currentTool = tid
                 levelEditor_.selectedObj = nil
+                -- 离开 prefab 工具时清理放置状态
+                if tid ~= "prefab" then
+                    levelEditor_.prefabMode = nil
+                    levelEditor_.prefabData = nil
+                end
                 M.BuildLevelEditorUI()
             end,
         })
@@ -135,9 +140,8 @@ function M.BuildLevelEditorUI()
         position = "absolute", left = panX, top = panY,
         width = canvasW, height = canvasH,
         backgroundColor = {0, 0, 0, 0},
-        pointerEvents = "none",  -- 不拦截点击，让下层 canvas_click_layer 处理
+        pointerEvents = "box-none",  -- 容器自身不拦截点击，但子元素（物件按钮）可被点击
     }
-    canvas:AddChild(canvasContent)
 
     -- 绘制网格线（用细条Panel模拟）
     local gridSize = levelEditor_.gridSize
@@ -191,7 +195,7 @@ function M.BuildLevelEditorUI()
         end
     end
 
-    -- 画布点击事件（放在物件之前，这样物件按钮在上层能接收点击）
+    -- 画布点击事件（z-index 低于 canvasContent，物件按钮优先接收点击）
     local key = ch .. "_" .. lv
     local objects = levelEditor_.objects[key] or {}
     canvas:AddChild(UI.Button {
@@ -210,8 +214,35 @@ function M.BuildLevelEditorUI()
             -- 映射模式下不放置物件（由 UpdateLevelEditor 处理）
             if levelEditor_.mappingMode then return end
             local tool = levelEditor_.currentTool
-            -- select/delete/texture 由物件按钮自身处理点击
+            -- select/delete/texture/prefab 由物件按钮自身处理点击或特殊逻辑
             if tool == "select" or tool == "delete" or tool == "texture" then
+                return
+            end
+            -- 预制体放置模式
+            if tool == "prefab" then
+                if levelEditor_.prefabMode == "place" and levelEditor_.prefabData then
+                    local Prefab = require("editor.Prefab")
+                    local dpr = graphics:GetDPR()
+                    local mx = input.mousePosition.x / dpr
+                    local my = input.mousePosition.y / dpr
+                    local canvasOffX = margin
+                    local canvasOffY = toolbarH + margin
+                    local localX = mx - canvasOffX
+                    local localY = my - canvasOffY
+                    local pnX = levelEditor_.canvasPanX or 0
+                    local pnY = levelEditor_.canvasPanY or 0
+                    local cX = localX - pnX
+                    local cY = localY - pnY
+                    cX = math.floor(cX / gridSize) * gridSize
+                    cY = math.floor(cY / gridSize) * gridSize
+                    local wx, wy = getTitleMenu().CanvasToWorld(cX, cY, gridSize, gridSize)
+                    getTitleMenu().PushUndoState()
+                    local newIndices = Prefab.InstantiateObjects(levelEditor_.prefabData, wx, wy, objects)
+                    levelEditor_.objects[key] = objects
+                    levelEditor_.selectedObj = newIndices[1]
+                    print("[Prefab] 放置预制体 '" .. (levelEditor_.prefabData.name or "?") .. "' 共 " .. #newIndices .. " 个对象")
+                    M.BuildLevelEditorUI()
+                end
                 return
             end
             -- 获取点击位置（相对于canvas，转为逻辑像素）
@@ -260,6 +291,18 @@ function M.BuildLevelEditorUI()
             levelEditor_.selectedObj = #objects
             M.BuildLevelEditorUI()
         end,
+    })
+
+    -- canvasContent 在 canvas_click_layer 之上，物件按钮可被 hit-test 命中
+    canvas:AddChild(canvasContent)
+
+    -- 鼠标世界坐标显示标签（绝对定位在画布左下角）
+    canvas:AddChild(UI.Label {
+        id = "canvas_mouse_coord",
+        position = "absolute", bottom = 4, left = 6,
+        fontSize = 11, fontColor = {160, 200, 240, 200},
+        text = "",
+        pointerEvents = "none",
     })
 
     -- 渲染已放置的物件（在 canvas_click_layer 之上，可接收点击）
@@ -357,20 +400,30 @@ function M.BuildLevelEditorUI()
             })
         end
 
+        -- 圆形碰撞时外观为圆形
+        local objBorderRadius = 2
+        local objDisplayW = math.max(pw, 8)
+        local objDisplayH = math.max(ph, 8)
+        if obj.collisionShape == "circle" then
+            objBorderRadius = math.max(objDisplayW, objDisplayH) / 2
+        end
+
         canvasContent:AddChild(UI.Button {
             id = "obj_" .. idx,
             position = "absolute",
             left = px, top = py,
-            width = math.max(pw, 8), height = math.max(ph, 8),
+            width = objDisplayW, height = objDisplayH,
             backgroundColor = bgColor,
-            borderRadius = 2,
+            borderRadius = objBorderRadius,
             borderWidth = isSelected and 3 or 1,
             borderColor = isSelected and {255, 255, 0, 255} or {255, 255, 255, 60},
             justifyContent = "center", alignItems = "center",
             overflow = "visible",
             children = objChildren,
             onClick = function()
-                if levelEditor_.currentTool == "select" or levelEditor_.currentTool == "texture" then
+                -- 画布刚完成拖拽平移或正在平移中，抑制本次点击
+                if levelEditor_.justPanned or levelEditor_.canvasPanning then return end
+                if levelEditor_.currentTool == "select" or levelEditor_.currentTool == "texture" or levelEditor_.currentTool == "prefab" then
                     levelEditor_.selectedObj = objIdx
                     if levelEditor_.currentTool == "texture" then
                         levelEditor_.textureBrowseTarget = objIdx
@@ -575,39 +628,57 @@ function M.BuildPropsPanel(panel, objects)
     local lv = levelEditor_.levelIdx
     local key = ch .. "_" .. lv
 
-    panel:AddChild(UI.Label {
-        text = "物件列表 (" .. #objects .. ")",
-        fontSize = 14, fontColor = {180, 200, 255, 255}, marginBottom = 4,
+    -- 物件列表（可收放）
+    local objListHeader = UI.Button {
+        width = "100%", height = 24,
+        flexDirection = "row", alignItems = "center", gap = 4,
+        paddingLeft = 4, paddingRight = 4,
+        backgroundColor = {40, 40, 70, 180},
+        borderRadius = 4, marginBottom = 4,
+        onClick = function()
+            levelEditor_.objListExpanded = not levelEditor_.objListExpanded
+            M.BuildLevelEditorUI()
+        end,
+    }
+    objListHeader:AddChild(UI.Label {
+        text = levelEditor_.objListExpanded and "▼" or "▶",
+        fontSize = 11, fontColor = {150, 150, 200, 255}, pointerEvents = "none",
     })
+    objListHeader:AddChild(UI.Label {
+        text = "物件列表 (" .. #objects .. ")",
+        fontSize = 14, fontColor = {180, 200, 255, 255}, pointerEvents = "none",
+    })
+    panel:AddChild(objListHeader)
 
-    -- 物件列表
-    for idx, obj in ipairs(objects) do
-        local objIdx = idx
-        local isSelected = (levelEditor_.selectedObj == idx)
-        local objColor = getTitleMenu().GetObjectColor(obj.type)
+    if levelEditor_.objListExpanded then
+        for idx, obj in ipairs(objects) do
+            local objIdx = idx
+            local isSelected = (levelEditor_.selectedObj == idx)
+            local objColor = getTitleMenu().GetObjectColor(obj.type)
 
-        local row = UI.Button {
-            width = "100%", height = 28,
-            flexDirection = "row", alignItems = "center", gap = 6,
-            paddingLeft = 6, paddingRight = 6,
-            backgroundColor = isSelected and {60, 60, 100, 200} or {30, 30, 50, 150},
-            borderRadius = 4,
-            onClick = function()
-                levelEditor_.selectedObj = objIdx
-                M.BuildLevelEditorUI()
-            end,
-        }
-        row:AddChild(UI.Panel {
-            width = 10, height = 10, borderRadius = 2,
-            backgroundColor = objColor,
-            pointerEvents = "none",
-        })
-        row:AddChild(UI.Label {
-            text = obj.name .. " [" .. string.format("%.1f,%.1f", obj.x, obj.y) .. "]",
-            fontSize = 11, fontColor = {200, 200, 220, 255},
-            pointerEvents = "none",
-        })
-        panel:AddChild(row)
+            local row = UI.Button {
+                width = "100%", height = 28,
+                flexDirection = "row", alignItems = "center", gap = 6,
+                paddingLeft = 6, paddingRight = 6,
+                backgroundColor = isSelected and {60, 60, 100, 200} or {30, 30, 50, 150},
+                borderRadius = 4,
+                onClick = function()
+                    levelEditor_.selectedObj = objIdx
+                    M.BuildLevelEditorUI()
+                end,
+            }
+            row:AddChild(UI.Panel {
+                width = 10, height = 10, borderRadius = 2,
+                backgroundColor = objColor,
+                pointerEvents = "none",
+            })
+            row:AddChild(UI.Label {
+                text = obj.name .. " [" .. string.format("%.1f,%.1f", obj.x + obj.w / 2, (levelEditor_.worldH or 17.5) - obj.y - obj.h / 2) .. "]",
+                fontSize = 11, fontColor = {200, 200, 220, 255},
+                pointerEvents = "none",
+            })
+            panel:AddChild(row)
+        end
     end
 
     -- 选中物件的属性编辑
@@ -702,10 +773,26 @@ function M.BuildPropsPanel(panel, objects)
             return row
         end
 
-        panel:AddChild(makeInputRow("X:", obj.x, function(v) obj.x = v end))
-        panel:AddChild(makeInputRow("Y:", obj.y, function(v) obj.y = v end))
-        panel:AddChild(makeInputRow("W:", obj.w, function(v) obj.w = math.max(0.5, v) end))
-        panel:AddChild(makeInputRow("H:", obj.h, function(v) obj.h = math.max(0.5, v) end))
+        -- 显示游戏坐标（中心点，Y-up）
+        local worldH = levelEditor_.worldH or 17.5
+        local displayX = obj.x + obj.w / 2
+        local displayY = worldH - obj.y - obj.h / 2
+        panel:AddChild(makeInputRow("X:", displayX, function(v) obj.x = v - obj.w / 2 end))
+        panel:AddChild(makeInputRow("Y:", displayY, function(v) obj.y = worldH - v - obj.h / 2 end))
+        if obj.collisionShape == "circle" then
+            -- 圆形碰撞：只显示半径输入
+            local radius = obj.circleRadius or (math.min(obj.w, obj.h) / 2)
+            panel:AddChild(makeInputRow("半径:", radius, function(v)
+                local r = math.max(0.25, v)
+                obj.circleRadius = r
+                -- 同步宽高为直径，保持一致
+                obj.w = r * 2
+                obj.h = r * 2
+            end, 0.25))
+        else
+            panel:AddChild(makeInputRow("W:", obj.w, function(v) obj.w = math.max(0.5, v) end))
+            panel:AddChild(makeInputRow("H:", obj.h, function(v) obj.h = math.max(0.5, v) end))
+        end
         panel:AddChild(makeInputRow("R°:", obj.rotation or 0, function(v) obj.rotation = v % 360 end, 5))
 
         -- ============ 颜色选择器 ============
@@ -841,7 +928,6 @@ function M.BuildPropsPanel(panel, objects)
 
         -- ============ 物件贴图图层 ============
         panel:AddChild(UI.Panel { width = "100%", height = 1, backgroundColor = {80,80,120,100}, marginTop = 6, marginBottom = 4 })
-        panel:AddChild(UI.Label { text = "物件贴图", fontSize = 12, fontColor = {200, 160, 255, 255} })
 
         -- 初始化 texLayers（兼容旧数据）
         if not obj.texLayers then obj.texLayers = {} end
@@ -853,8 +939,23 @@ function M.BuildPropsPanel(panel, objects)
             obj.texture = nil; obj.textureName = nil; obj.texScaleW = nil; obj.texScaleH = nil
         end
 
-        -- 贴图图层列表
-        if #obj.texLayers > 0 then
+        -- 贴图图层列表（可折叠）
+        local objTexExpanded = levelEditor_.objTexLayersExpanded ~= false
+        local texLayerTitle = "物件贴图 (" .. #obj.texLayers .. "层)"
+        panel:AddChild(UI.Button {
+            text = (objTexExpanded and "▼ " or "▶ ") .. texLayerTitle,
+            fontSize = 11, width = "100%", height = 22, marginBottom = 2,
+            backgroundColor = {50, 45, 80, 180}, borderRadius = 3,
+            justifyContent = "center", alignItems = "center",
+            fontColor = {200, 160, 255, 255},
+            borderWidth = 1, borderColor = {80, 70, 120, 120},
+            onClick = function()
+                levelEditor_.objTexLayersExpanded = not objTexExpanded
+                M.BuildLevelEditorUI()
+            end,
+        })
+
+        if objTexExpanded and #obj.texLayers > 0 then
             for tli = 1, #obj.texLayers do
                 local tLayer = obj.texLayers[tli]
                 local isTSel = (obj.selectedTexLayer == tli)
@@ -978,7 +1079,7 @@ function M.BuildPropsPanel(panel, objects)
                     selTLayer.rotation = v % 360
                 end, 15, "%.0f°"))
             end
-        else
+        elseif objTexExpanded then
             panel:AddChild(UI.Label { text = "无贴图图层\n选择贴图工具添加", fontSize = 9, fontColor = {140,120,180,180}, marginTop = 2 })
         end
 
@@ -1196,6 +1297,59 @@ function M.BuildPropsPanel(panel, objects)
             panel:AddChild(StrategyEditor.Build(obj, "executorStrategy", function() M.BuildLevelEditorUI() end, function() getTitleMenu().PushUndoState() end))
         end
 
+        -- ============ 碰撞形状 & 摩擦力 ============
+        panel:AddChild(UI.Panel { width = "100%", height = 1, backgroundColor = {100,80,160,80}, marginTop = 6, marginBottom = 4 })
+        panel:AddChild(UI.Label { text = "碰撞属性", fontSize = 12, fontColor = {180, 140, 255, 255} })
+
+        -- 碰撞形状选择
+        local COLLISION_SHAPE_OPTIONS = { "box", "circle" }
+        local COLLISION_SHAPE_LABELS = { box = "矩形", circle = "圆形" }
+        local curShape = obj.collisionShape or "box"
+        local shapeRow = UI.Panel { flexDirection = "row", alignItems = "center", gap = 6, width = "100%", marginBottom = 4 }
+        shapeRow:AddChild(UI.Label { text = "形状", fontSize = 11, fontColor = {160, 160, 200, 255} })
+        for _, shapeKey in ipairs(COLLISION_SHAPE_OPTIONS) do
+            local isActive = (curShape == shapeKey)
+            shapeRow:AddChild(UI.Button {
+                text = COLLISION_SHAPE_LABELS[shapeKey], fontSize = 9,
+                paddingLeft = 6, paddingRight = 6, paddingTop = 2, paddingBottom = 2,
+                backgroundColor = isActive and {120, 100, 200, 230} or {60, 60, 80, 180},
+                borderRadius = 3, fontColor = isActive and {255, 255, 255, 255} or {160, 160, 180, 200},
+                onClick = function()
+                    getTitleMenu().PushUndoState()
+                    obj.collisionShape = shapeKey
+                    -- 切换到圆形时，同步半径和宽高
+                    if shapeKey == "circle" then
+                        local r = obj.circleRadius or (math.min(obj.w, obj.h) / 2)
+                        obj.circleRadius = r
+                        obj.w = r * 2
+                        obj.h = r * 2
+                    end
+                    M.BuildLevelEditorUI()
+                end,
+            })
+        end
+        panel:AddChild(shapeRow)
+
+        -- 摩擦力设置
+        local frictionRow = UI.Panel { flexDirection = "row", alignItems = "center", gap = 6, width = "100%", marginBottom = 4 }
+        frictionRow:AddChild(UI.Label { text = "摩擦力", fontSize = 11, fontColor = {160, 160, 200, 255} })
+        frictionRow:AddChild(UI.Slider {
+            value = (obj.friction or 0.3) * 100,
+            min = 0, max = 100, step = 5,
+            width = 100, height = 16,
+            onChange = function(self, v)
+                obj.friction = v / 100
+            end,
+            onRelease = function()
+                getTitleMenu().PushUndoState()
+            end,
+        })
+        frictionRow:AddChild(UI.Label {
+            text = string.format("%.2f", obj.friction or 0.3),
+            fontSize = 10, fontColor = {200, 200, 220, 200},
+        })
+        panel:AddChild(frictionRow)
+
         -- ============ 动态效果配置 ============
         panel:AddChild(UI.Panel { width = "100%", height = 1, backgroundColor = {80,120,180,100}, marginTop = 6, marginBottom = 4 })
         panel:AddChild(UI.Label { text = "动态效果", fontSize = 12, fontColor = {80, 180, 255, 255} })
@@ -1249,14 +1403,16 @@ function M.BuildPropsPanel(panel, objects)
                         paramRow:AddChild(UI.Label { text = schema.label or pKey, fontSize = 9, fontColor = {150, 180, 220, 200}, width = 60 })
 
                         if schema.type == "texture" then
-                            -- 贴图选择器：从 customTextures 列表中选择
+                            -- 贴图选择器：从 customTextures 列表中选择（可收放）
                             local currentPath = tostring(pVal)
                             local shortName = currentPath ~= "" and currentPath:match("[^/]+$") or "(无)"
+                            local isOpen = eff._texPickerOpen
+                            local toggleIcon = isOpen and "▼" or "▶"
                             paramRow:AddChild(UI.Button {
-                                text = shortName, fontSize = 8, width = 80, height = 20,
+                                text = toggleIcon .. " " .. shortName, fontSize = 8, flexGrow = 1, height = 20,
                                 backgroundColor = {40, 50, 80, 255}, borderRadius = 2,
-                                borderWidth = 1, borderColor = {80, 120, 200, 180},
-                                fontColor = {180, 210, 255, 255},
+                                borderWidth = 1, borderColor = isOpen and {100, 160, 255, 200} or {80, 120, 200, 180},
+                                fontColor = {180, 210, 255, 255}, paddingLeft = 4,
                                 onClick = function()
                                     -- 展开/收起贴图选择列表
                                     eff._texPickerOpen = not eff._texPickerOpen
@@ -1264,16 +1420,35 @@ function M.BuildPropsPanel(panel, objects)
                                 end,
                             })
                             panel:AddChild(paramRow)
-                            -- 贴图选择列表（展开时显示）
-                            if eff._texPickerOpen then
+                            -- 贴图选择列表（展开时显示，限高可滚动）
+                            if isOpen then
                                 local texList = levelEditor_.customTextures or {}
-                                local pickerPanel = UI.Panel { width = "100%", paddingLeft = 16, marginBottom = 4 }
+                                -- 序列帧图片选择器只显示 seq 分类的图片
+                                if schema.type == "texture" and (schema.cat_filter or (pKey == "path" and eff.id == "spritesheet")) then
+                                    local filtered = {}
+                                    local filterCat = schema.cat_filter or "seq"
+                                    for _, ta in ipairs(texList) do
+                                        local c = ta.cat or "other"
+                                        if c == filterCat or c == "sequence" then
+                                            table.insert(filtered, ta)
+                                        end
+                                    end
+                                    texList = filtered
+                                end
+                                local pickerPanel = UI.Panel {
+                                    width = "100%", paddingLeft = 12, marginBottom = 4,
+                                    maxHeight = 150, overflow = "scroll",
+                                    backgroundColor = {25, 30, 42, 200}, borderRadius = 3,
+                                    paddingVertical = 3, paddingRight = 4,
+                                    borderWidth = 1, borderColor = {60, 80, 120, 150},
+                                }
                                 -- 清空选项
                                 pickerPanel:AddChild(UI.Button {
-                                    text = "清空", fontSize = 8,
-                                    paddingLeft = 6, paddingRight = 6, paddingTop = 2, paddingBottom = 2,
+                                    text = "✕ 清空选择", fontSize = 8,
+                                    width = "100%", height = 18,
+                                    paddingLeft = 6, paddingTop = 2, paddingBottom = 2,
                                     backgroundColor = {80, 40, 40, 200}, borderRadius = 2,
-                                    fontColor = {255, 180, 180, 255}, marginBottom = 2,
+                                    fontColor = {255, 180, 180, 255}, marginBottom = 3,
                                     onClick = function()
                                         getTitleMenu().PushUndoState()
                                         eff.params[pKey] = ""
@@ -1287,10 +1462,10 @@ function M.BuildPropsPanel(panel, objects)
                                     local texName = texAsset.name or texPath:match("[^/]+$") or texPath
                                     local isCurrent = (texPath == currentPath)
                                     pickerPanel:AddChild(UI.Button {
-                                        text = (isCurrent and "> " or "  ") .. texName, fontSize = 8,
+                                        text = (isCurrent and "● " or "  ") .. texName, fontSize = 8,
                                         width = "100%", height = 18,
                                         paddingLeft = 6, paddingTop = 1, paddingBottom = 1,
-                                        backgroundColor = isCurrent and {50, 80, 140, 255} or {30, 40, 60, 200},
+                                        backgroundColor = isCurrent and {50, 80, 140, 255} or {30, 40, 60, 180},
                                         borderRadius = 2,
                                         fontColor = isCurrent and {255, 255, 255, 255} or {160, 190, 220, 220},
                                         onClick = function()
@@ -1304,6 +1479,17 @@ function M.BuildPropsPanel(panel, objects)
                                 if #texList == 0 then
                                     pickerPanel:AddChild(UI.Label { text = "无可用贴图（请先在贴图工具中导入）", fontSize = 8, fontColor = {120, 120, 140, 180} })
                                 end
+                                -- 收起按钮（列表底部）
+                                pickerPanel:AddChild(UI.Button {
+                                    text = "▲ 收起", fontSize = 8,
+                                    width = "100%", height = 16, marginTop = 3,
+                                    backgroundColor = {50, 60, 80, 200}, borderRadius = 2,
+                                    fontColor = {140, 170, 220, 200}, justifyContent = "center", alignItems = "center",
+                                    onClick = function()
+                                        eff._texPickerOpen = false
+                                        M.BuildLevelEditorUI()
+                                    end,
+                                })
                                 panel:AddChild(pickerPanel)
                             end
                         elseif schema.type == "bool" then
@@ -1632,6 +1818,9 @@ function M.BuildPropsPanel(panel, objects)
         local startRow = UI.Panel { flexDirection = "row", alignItems = "center", gap = 2, width = "100%", marginBottom = 2 }
         startRow:AddChild(UI.Label { text = "出生点:", fontSize = 10, fontColor = {140, 220, 180, 255}, width = 58 })
         if hasStart then
+            -- 显示游戏坐标（Y-up）
+            local wH = levelEditor_.worldH or 17.5
+            local displayStartY = wH - levelEditor_.playerStartY
             startRow:AddChild(UI.TextField {
                 value = string.format("%.1f", levelEditor_.playerStartX), fontSize = 10, width = 38, height = 20,
                 backgroundColor = {20, 40, 30, 255}, fontColor = {200, 255, 220, 255},
@@ -1656,23 +1845,23 @@ function M.BuildPropsPanel(panel, objects)
             })
             startRow:AddChild(UI.Label { text = ",", fontSize = 10, fontColor = {140, 220, 180, 255} })
             startRow:AddChild(UI.TextField {
-                value = string.format("%.1f", levelEditor_.playerStartY), fontSize = 10, width = 38, height = 20,
+                value = string.format("%.1f", displayStartY), fontSize = 10, width = 38, height = 20,
                 backgroundColor = {20, 40, 30, 255}, fontColor = {200, 255, 220, 255},
                 borderRadius = 3, paddingHorizontal = 2,
                 onSubmit = function(self, txt)
                     local num = tonumber(txt)
                     if num then
                         getTitleMenu().PushUndoState()
-                        levelEditor_.playerStartY = num
+                        levelEditor_.playerStartY = wH - num
                         M.BuildLevelEditorUI()
                     end
                 end,
                 onBlur = function(self)
                     local txt = self:GetValue() or ""
                     local num = tonumber(txt)
-                    if num and math.abs(num - (levelEditor_.playerStartY or 0)) > 0.01 then
+                    if num and math.abs(num - displayStartY) > 0.01 then
                         getTitleMenu().PushUndoState()
-                        levelEditor_.playerStartY = num
+                        levelEditor_.playerStartY = wH - num
                         M.BuildLevelEditorUI()
                     end
                 end,
@@ -1731,7 +1920,20 @@ function M.BuildPropsPanel(panel, objects)
         -- 图层列表
         local bgLayers = levelEditor_.bgLayers
         if #bgLayers > 0 then
-            panel:AddChild(UI.Label { text = "背景图层 (" .. #bgLayers .. "层)", fontSize = 11, fontColor = {180,160,220,255}, marginTop = 4 })
+            local bgExpanded = levelEditor_.bgLayersExpanded ~= false
+            panel:AddChild(UI.Button {
+                text = (bgExpanded and "▼ " or "▶ ") .. "背景图层 (" .. #bgLayers .. "层)",
+                fontSize = 11, width = "100%", height = 22, marginTop = 4, marginBottom = 2,
+                backgroundColor = {50, 45, 80, 180}, borderRadius = 3,
+                justifyContent = "center", alignItems = "center",
+                fontColor = {180, 160, 220, 255},
+                borderWidth = 1, borderColor = {80, 70, 120, 120},
+                onClick = function()
+                    levelEditor_.bgLayersExpanded = not bgExpanded
+                    M.BuildLevelEditorUI()
+                end,
+            })
+            if not bgExpanded then goto bg_layers_end end
             for li = 1, #bgLayers do
                 local layer = bgLayers[li]
                 local isSel = (levelEditor_.selectedBgLayer == li)
@@ -1973,6 +2175,7 @@ function M.BuildPropsPanel(panel, objects)
 
                 end -- if not layerLocked
             end
+            ::bg_layers_end::
         end
 
         -- 如果有选中物件，可对其添加贴图图层
@@ -1998,7 +2201,7 @@ function M.BuildPropsPanel(panel, objects)
         if #levelEditor_.customTextures > 0 then
             panel:AddChild(UI.Label { text = "已导入素材 (点击应用):", fontSize = 10, fontColor = {150,140,180,255}, marginTop = 6 })
             -- 按分类分组
-            local catGroups = { bg = {}, tile = {}, seq = {}, solid = {}, other = {} }
+            local catGroups = { bg = {}, tile = {}, seq = {}, interact = {}, solid = {}, other = {} }
             for tidx, asset in ipairs(levelEditor_.customTextures) do
                 local cat = asset.cat or "other"
                 if cat == "sequence" or cat == "seq" then cat = "seq" end
@@ -2009,6 +2212,7 @@ function M.BuildPropsPanel(panel, objects)
                 { key = "bg", label = "背景", color = {100, 180, 100, 255} },
                 { key = "tile", label = "物件/地面", color = {180, 140, 80, 255} },
                 { key = "seq", label = "序列帧", color = {100, 160, 220, 255} },
+                { key = "interact", label = "交互", color = {220, 120, 180, 255} },
                 { key = "solid", label = "纯色", color = {200, 200, 200, 255} },
                 { key = "other", label = "其他", color = {160, 140, 180, 255} },
             }
@@ -2034,21 +2238,44 @@ function M.BuildPropsPanel(panel, objects)
                         for _, item in ipairs(items) do
                             local assetPath = item.asset.path
                             local assetName = item.asset.name
-                            panel:AddChild(UI.Button {
-                                text = "  " .. assetName, fontSize = 11, width = "100%", height = 24, marginBottom = 1,
+                            local assetIdx = item.idx
+                            panel:AddChild(UI.Panel {
+                                width = "100%", height = 26, marginBottom = 1,
+                                flexDirection = "row", alignItems = "center",
                                 backgroundColor = {40, 35, 70, 200}, borderRadius = 3,
-                                paddingLeft = 12,
-                                fontColor = {200, 180, 255, 255},
                                 borderWidth = 1, borderColor = {80, 65, 130, 120},
-                                onClick = function()
-                                    local target = levelEditor_.textureBrowseTarget
-                                    if target == "bg" then
-                                        getTitleMenu().AddBgLayer(assetPath, assetName)
-                                    elseif type(target) == "number" and objects[target] then
-                                        getTitleMenu().AddObjTexLayer(target, assetPath, assetName)
-                                    end
-                                    M.BuildLevelEditorUI()
-                                end,
+                                children = {
+                                    -- 素材名称按钮（点击应用）
+                                    UI.Button {
+                                        text = "  " .. assetName, fontSize = 11,
+                                        flexGrow = 1, height = "100%",
+                                        backgroundColor = {0, 0, 0, 0}, borderRadius = 0,
+                                        paddingLeft = 8,
+                                        fontColor = {200, 180, 255, 255},
+                                        onClick = function()
+                                            local target = levelEditor_.textureBrowseTarget
+                                            if target == "bg" then
+                                                getTitleMenu().AddBgLayer(assetPath, assetName)
+                                            elseif type(target) == "number" and objects[target] then
+                                                getTitleMenu().AddObjTexLayer(target, assetPath, assetName)
+                                            end
+                                            M.BuildLevelEditorUI()
+                                        end,
+                                    },
+                                    -- 删除按钮
+                                    UI.Button {
+                                        text = "×", fontSize = 14, width = 24, height = "100%",
+                                        backgroundColor = {0, 0, 0, 0}, borderRadius = 0,
+                                        fontColor = {200, 100, 100, 200},
+                                        justifyContent = "center", alignItems = "center",
+                                        onClick = function()
+                                            -- 从列表中移除该素材
+                                            table.remove(levelEditor_.customTextures, assetIdx)
+                                            print("[Editor] 已删除素材: " .. assetName)
+                                            M.BuildLevelEditorUI()
+                                        end,
+                                    },
+                                },
                             })
                         end
                     end
@@ -2068,6 +2295,194 @@ function M.BuildPropsPanel(panel, objects)
                 fontSize = 9, fontColor = {140, 120, 180, 180}, marginTop = 4,
             })
         end
+    end
+
+    -- ================================================================
+    -- 预制体系统 UI
+    -- ================================================================
+
+    -- 「保存为预制体」按钮 —— 选中对象时显示
+    if levelEditor_.selectedObj and objects[levelEditor_.selectedObj] then
+        panel:AddChild(UI.Panel { width = "100%", height = 1, backgroundColor = {60,80,80,100}, marginTop = 8 })
+        panel:AddChild(UI.Button {
+            width = "100%", paddingTop = 8, paddingBottom = 8,
+            backgroundColor = {40, 150, 130, 220}, borderRadius = 6,
+            justifyContent = "center", alignItems = "center",
+            children = { UI.Label { text = "保存为预制体", fontSize = 12, fontColor = {255,255,255,255} } },
+            onClick = function()
+                -- 收集选中对象（当前仅单选，用数组包裹）
+                local indices = { levelEditor_.selectedObj }
+                -- 如果有多选，合并
+                if levelEditor_.multiSelectActive and next(levelEditor_.multiSelect) then
+                    indices = {}
+                    for idx, _ in pairs(levelEditor_.multiSelect) do
+                        indices[#indices + 1] = idx
+                    end
+                    table.sort(indices)
+                end
+                -- 弹出命名输入
+                levelEditor_.prefabSaveIndices = indices
+                levelEditor_.prefabSaveNaming = true
+                levelEditor_.prefabSaveName = "prefab_" .. os.time()
+                M.BuildLevelEditorUI()
+            end,
+        })
+    end
+
+    -- 预制体命名弹窗（保存流程）
+    if levelEditor_.prefabSaveNaming then
+        panel:AddChild(UI.Panel {
+            width = "100%", marginTop = 6, padding = 8,
+            backgroundColor = {30, 50, 50, 220}, borderRadius = 6,
+            borderWidth = 1, borderColor = {80, 200, 180, 150},
+            flexDirection = "column", gap = 6,
+            children = {
+                UI.Label { text = "预制体名称:", fontSize = 11, fontColor = {180, 220, 200, 255} },
+                UI.TextField {
+                    id = "prefab_name_input",
+                    width = "100%", height = 28, fontSize = 12,
+                    text = levelEditor_.prefabSaveName or "",
+                    onChange = function(self, text)
+                        levelEditor_.prefabSaveName = text
+                    end,
+                },
+                UI.Panel {
+                    flexDirection = "row", gap = 6,
+                    children = {
+                        UI.Button {
+                            paddingLeft = 12, paddingRight = 12, paddingTop = 5, paddingBottom = 5,
+                            backgroundColor = {40, 160, 130, 230}, borderRadius = 4,
+                            children = { UI.Label { text = "确认保存", fontSize = 11, fontColor = {255,255,255,255} } },
+                            onClick = function()
+                                local Prefab = require("editor.Prefab")
+                                local name = levelEditor_.prefabSaveName or "unnamed"
+                                local indices = levelEditor_.prefabSaveIndices or {}
+                                local ok, err = Prefab.SavePrefab(name, objects, indices)
+                                if ok then
+                                    print("[Prefab] 保存成功: " .. name)
+                                else
+                                    print("[Prefab] 保存失败: " .. tostring(err))
+                                end
+                                levelEditor_.prefabSaveNaming = false
+                                levelEditor_.prefabSaveIndices = nil
+                                M.BuildLevelEditorUI()
+                            end,
+                        },
+                        UI.Button {
+                            paddingLeft = 12, paddingRight = 12, paddingTop = 5, paddingBottom = 5,
+                            backgroundColor = {80, 60, 60, 200}, borderRadius = 4,
+                            children = { UI.Label { text = "取消", fontSize = 11, fontColor = {200,200,200,255} } },
+                            onClick = function()
+                                levelEditor_.prefabSaveNaming = false
+                                levelEditor_.prefabSaveIndices = nil
+                                M.BuildLevelEditorUI()
+                            end,
+                        },
+                    },
+                },
+            },
+        })
+    end
+
+    -- 预制体库面板（prefab 工具激活时展示）
+    if levelEditor_.currentTool == "prefab" then
+        panel:AddChild(UI.Panel { width = "100%", height = 1, backgroundColor = {60,80,80,100}, marginTop = 10 })
+        panel:AddChild(UI.Label {
+            text = "预制体库", fontSize = 14, fontColor = {100, 220, 200, 255}, marginBottom = 4,
+        })
+
+        local Prefab = require("editor.Prefab")
+        local prefabList = Prefab.ListPrefabs()
+
+        if #prefabList == 0 then
+            panel:AddChild(UI.Label {
+                text = "暂无预制体\n选中对象后点击「保存为预制体」",
+                fontSize = 10, fontColor = {140, 160, 160, 180}, marginTop = 4,
+            })
+        else
+            for pi, pInfo in ipairs(prefabList) do
+                local isActive = (levelEditor_.prefabMode == "place" and levelEditor_.prefabData and levelEditor_.prefabData.name == pInfo.name)
+                panel:AddChild(UI.Panel {
+                    width = "100%", height = 32, marginBottom = 2,
+                    flexDirection = "row", alignItems = "center",
+                    backgroundColor = isActive and {60, 140, 120, 200} or {30, 50, 50, 180},
+                    borderRadius = 4,
+                    borderWidth = isActive and 2 or 0,
+                    borderColor = {100, 255, 200, 200},
+                    children = {
+                        -- 预制体名称按钮（点击选中放置）
+                        UI.Button {
+                            flexGrow = 1, height = "100%",
+                            flexDirection = "row", alignItems = "center", gap = 6,
+                            paddingLeft = 8,
+                            backgroundColor = {0, 0, 0, 0}, borderRadius = 0,
+                            onClick = function()
+                                local data, err = Prefab.LoadPrefab(pInfo.filePath)
+                                if data then
+                                    levelEditor_.prefabMode = "place"
+                                    levelEditor_.prefabData = data
+                                    levelEditor_.selectedObj = nil
+                                    print("[Prefab] 选中预制体: " .. pInfo.name .. " (点击画布放置)")
+                                else
+                                    print("[Prefab] 加载失败: " .. tostring(err))
+                                end
+                                M.BuildLevelEditorUI()
+                            end,
+                            children = {
+                                UI.Panel {
+                                    width = 10, height = 10, borderRadius = 2,
+                                    backgroundColor = {100, 200, 180, 255},
+                                    pointerEvents = "none",
+                                },
+                                UI.Label {
+                                    text = pInfo.name .. " (" .. pInfo.objectCount .. ")",
+                                    fontSize = 11, fontColor = {200, 240, 220, 255},
+                                    pointerEvents = "none",
+                                },
+                            },
+                        },
+                        -- 删除按钮
+                        UI.Button {
+                            text = "×", fontSize = 14, width = 28, height = "100%",
+                            backgroundColor = {0, 0, 0, 0}, borderRadius = 0,
+                            fontColor = {200, 100, 100, 200},
+                            justifyContent = "center", alignItems = "center",
+                            onClick = function()
+                                Prefab.DeletePrefab(pInfo.filePath)
+                                print("[Prefab] 已删除预制体: " .. pInfo.name)
+                                -- 如果正在放置被删除的预制体，取消放置模式
+                                if levelEditor_.prefabData and levelEditor_.prefabData.name == pInfo.name then
+                                    levelEditor_.prefabMode = nil
+                                    levelEditor_.prefabData = nil
+                                end
+                                M.BuildLevelEditorUI()
+                            end,
+                        },
+                    },
+                })
+            end
+        end
+
+        -- 取消放置模式按钮
+        if levelEditor_.prefabMode == "place" then
+            panel:AddChild(UI.Button {
+                width = "100%", paddingTop = 6, paddingBottom = 6, marginTop = 6,
+                backgroundColor = {120, 60, 60, 200}, borderRadius = 4,
+                justifyContent = "center", alignItems = "center",
+                children = { UI.Label { text = "取消放置", fontSize = 11, fontColor = {255, 200, 200, 255} } },
+                onClick = function()
+                    levelEditor_.prefabMode = nil
+                    levelEditor_.prefabData = nil
+                    M.BuildLevelEditorUI()
+                end,
+            })
+        end
+
+        -- 提示
+        panel:AddChild(UI.Label {
+            text = "提示: 选中预制体后\n点击画布即可放置",
+            fontSize = 9, fontColor = {120, 160, 150, 180}, marginTop = 6,
+        })
     end
 
     -- 底部说明

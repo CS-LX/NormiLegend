@@ -52,6 +52,7 @@ local state = {
     contextY = 0,
     menuWorldX = 0,
     menuWorldY = 0,
+    menuSelectedCat = 1,  -- 当前选中的分类tab索引
 
     -- Inspector (UI 组件)
     inspectorRoot = nil,
@@ -210,6 +211,15 @@ function M._buildInspector(nodeId)
         table.insert(children, UI.Label { text = "该节点无可编辑属性", fontSize = 11, fontColor = {120,120,140,180} })
     else
         for _, field in ipairs(fields) do
+            -- showWhen 条件过滤：字段仅在节点某个属性匹配时显示
+            if field.showWhen then
+                local visible = true
+                for condKey, condVal in pairs(field.showWhen) do
+                    if node[condKey] ~= condVal then visible = false; break end
+                end
+                if not visible then goto continueField end
+            end
+
             -- 字段标签
             table.insert(children, UI.Label {
                 text = field.label, fontSize = 10, fontColor = {180, 180, 200, 220}, marginBottom = 2,
@@ -223,6 +233,7 @@ function M._buildInspector(nodeId)
 
             -- 间距
             table.insert(children, UI.Panel { width = "100%", height = 6 })
+            ::continueField::
         end
     end
 
@@ -398,6 +409,274 @@ function M._createFieldEditor(node, field)
                 M._buildInspector(nodeRef.id)
             end,
         }
+
+    elseif field.type == "obj_select" then
+        -- 物件列表选择器：从当前关卡的物件列表中选择目标
+        local EditorState = require("editor.EditorState")
+        local edState = EditorState.state
+        local chKey = edState.chapterIdx .. "_" .. edState.levelIdx
+        local objects = edState.objects[chKey] or {}
+        local currentIdx = node[field.key] or 0
+
+        local optChildren = {}
+        -- "无" 选项
+        table.insert(optChildren, UI.Button {
+            text = "（无）",
+            fontSize = 10, height = 22, width = "100%",
+            backgroundColor = (currentIdx == 0) and {80, 100, 160, 220} or {50, 50, 65, 180},
+            borderRadius = 3,
+            fontColor = (currentIdx == 0) and {255, 240, 150, 255} or {200, 200, 210, 220},
+            paddingLeft = 6, justifyContent = "center",
+            onClick = function()
+                nodeRef[field.key] = 0
+                state.inspectorNodeId = nil
+                M._buildInspector(nodeRef.id)
+            end,
+        })
+        -- 物件列表
+        for i, obj in ipairs(objects) do
+            local objLabel = string.format("%d. %s", i, obj.name or obj.type or "物件")
+            local isActive = (i == currentIdx)
+            table.insert(optChildren, UI.Button {
+                text = objLabel,
+                fontSize = 10, height = 22, width = "100%",
+                backgroundColor = isActive and {80, 100, 160, 220} or {50, 50, 65, 180},
+                borderRadius = 3,
+                fontColor = isActive and {255, 240, 150, 255} or {180, 200, 210, 220},
+                paddingLeft = 6, justifyContent = "center",
+                onClick = function()
+                    nodeRef[field.key] = i
+                    state.inspectorNodeId = nil
+                    M._buildInspector(nodeRef.id)
+                end,
+            })
+        end
+
+        return UI.Panel {
+            width = "100%", flexDirection = "column", gap = 2,
+            maxHeight = 150, overflow = "scroll",
+            backgroundColor = {38, 38, 50, 200}, borderRadius = 4,
+            paddingVertical = 4, paddingHorizontal = 2,
+            children = optChildren,
+        }
+
+    elseif field.type == "path_editor" then
+        -- 路径点编辑器：根据 pathType 动态显示不同的参数
+        local points = node[field.key]
+        if type(points) ~= "table" then points = {}; node[field.key] = points end
+        local pathType = node.pathType or "linear"
+
+        local pointChildren = {}
+
+        -- 辅助：创建带标签的输入字段
+        local function makeField(labelText, value, onApply, width)
+            return UI.Panel {
+                flexDirection = "row", alignItems = "center", gap = 2, flexGrow = width and 0 or 1,
+                width = width,
+                children = {
+                    UI.Label { text = labelText, fontSize = 9, fontColor = {140,170,200,200}, width = 18 },
+                    UI.TextField {
+                        value = string.format("%.1f", value or 0),
+                        fontSize = 10, height = 22, flexGrow = 1,
+                        backgroundColor = {45, 45, 60, 255}, fontColor = {200, 230, 255, 255},
+                        borderRadius = 3, paddingHorizontal = 4, textAlign = "center",
+                        onSubmit = function(self, txt)
+                            local v = tonumber(txt)
+                            if v then onApply(v) end
+                        end,
+                    },
+                },
+            }
+        end
+
+        -- Y-up 坐标提示（与游戏世界坐标一致：Y+ = 向上）
+        local yUpHint = UI.Label { text = "绝对世界坐标 (Y+ = 向上)", fontSize = 9, fontColor = {120,180,140,180}, marginBottom = 4 }
+
+        if pathType == "linear" then
+            -- 直线：1个终点 {x, y} — 绝对世界坐标
+            if #points == 0 then table.insert(points, { x = 10, y = 5 }) end
+            local pt = points[1]
+            table.insert(pointChildren, yUpHint)
+            table.insert(pointChildren, UI.Label { text = "目标坐标", fontSize = 10, fontColor = {160,200,160,220}, marginBottom = 2 })
+            table.insert(pointChildren, UI.Panel {
+                flexDirection = "row", alignItems = "center", width = "100%", gap = 4,
+                children = {
+                    makeField("X", pt.x, function(v) pt.x = v end),
+                    makeField("Y", pt.y, function(v) pt.y = v end),
+                },
+            })
+
+        elseif pathType == "bezier" then
+            -- 贝塞尔：1个点 {x, y, cx, cy} — 均为绝对世界坐标
+            if #points == 0 then table.insert(points, { x = 10, y = 5, cx = 5, cy = 8 }) end
+            local pt = points[1]
+            if pt.cx == nil then pt.cx = (pt.x or 0) / 2 end
+            if pt.cy == nil then pt.cy = (pt.y or 0) + 2 end
+            table.insert(pointChildren, yUpHint)
+            table.insert(pointChildren, UI.Label { text = "目标坐标", fontSize = 10, fontColor = {160,200,160,220}, marginBottom = 2 })
+            table.insert(pointChildren, UI.Panel {
+                flexDirection = "row", alignItems = "center", width = "100%", gap = 4,
+                children = {
+                    makeField("X", pt.x, function(v) pt.x = v end),
+                    makeField("Y", pt.y, function(v) pt.y = v end),
+                },
+            })
+            table.insert(pointChildren, UI.Label { text = "控制点坐标", fontSize = 10, fontColor = {200,180,140,220}, marginTop = 4, marginBottom = 2 })
+            table.insert(pointChildren, UI.Panel {
+                flexDirection = "row", alignItems = "center", width = "100%", gap = 4,
+                children = {
+                    makeField("cX", pt.cx, function(v) pt.cx = v end),
+                    makeField("cY", pt.cy, function(v) pt.cy = v end),
+                },
+            })
+
+        elseif pathType == "circle" then
+            -- 圆形轨迹：1个点 {radius, startAngle, endAngle}
+            if #points == 0 then table.insert(points, { radius = 2, startAngle = 0, endAngle = 360 }) end
+            local pt = points[1]
+            if pt.radius == nil then pt.radius = 2 end
+            if pt.startAngle == nil then pt.startAngle = 0 end
+            if pt.endAngle == nil then pt.endAngle = 360 end
+            table.insert(pointChildren, UI.Label { text = "圆弧参数", fontSize = 10, fontColor = {160,200,160,220}, marginBottom = 2 })
+            table.insert(pointChildren, UI.Panel {
+                flexDirection = "row", alignItems = "center", width = "100%", gap = 4,
+                children = {
+                    makeField("R", pt.radius, function(v) pt.radius = math.max(0.1, v) end),
+                },
+            })
+            table.insert(pointChildren, UI.Panel {
+                flexDirection = "row", alignItems = "center", width = "100%", gap = 4, marginTop = 4,
+                children = {
+                    makeField("起", pt.startAngle, function(v) pt.startAngle = v end),
+                    makeField("止", pt.endAngle, function(v) pt.endAngle = v end),
+                },
+            })
+            table.insert(pointChildren, UI.Label { text = "角度(°) 0=右 逆时针", fontSize = 9, fontColor = {120,130,150,180}, marginTop = 2 })
+
+        elseif pathType == "custom" then
+            -- 自定义路径：多个途经点 {x, y} — 绝对世界坐标
+            table.insert(pointChildren, UI.Label { text = "途经点(绝对坐标)", fontSize = 10, fontColor = {160,200,160,220}, marginBottom = 2 })
+            table.insert(pointChildren, yUpHint)
+            for i, pt in ipairs(points) do
+                table.insert(pointChildren, UI.Panel {
+                    flexDirection = "row", alignItems = "center", width = "100%", gap = 2, height = 26,
+                    children = {
+                        UI.Label { text = string.format("#%d", i), fontSize = 9, fontColor = {140,160,180,200}, width = 22 },
+                        UI.TextField {
+                            value = string.format("%.1f", pt.x or 0),
+                            fontSize = 10, height = 22, flexGrow = 1,
+                            backgroundColor = {45, 45, 60, 255}, fontColor = {200, 230, 255, 255},
+                            borderRadius = 3, paddingHorizontal = 4, textAlign = "center",
+                            onSubmit = function(self, txt)
+                                local v = tonumber(txt)
+                                if v then points[i].x = v end
+                            end,
+                        },
+                        UI.TextField {
+                            value = string.format("%.1f", pt.y or 0),
+                            fontSize = 10, height = 22, flexGrow = 1,
+                            backgroundColor = {45, 45, 60, 255}, fontColor = {200, 230, 255, 255},
+                            borderRadius = 3, paddingHorizontal = 4, textAlign = "center",
+                            onSubmit = function(self, txt)
+                                local v = tonumber(txt)
+                                if v then points[i].y = v end
+                            end,
+                        },
+                        UI.Button {
+                            text = "×", fontSize = 12, width = 22, height = 22,
+                            backgroundColor = {100, 40, 40, 200}, borderRadius = 3,
+                            fontColor = {255, 180, 180, 255}, justifyContent = "center", alignItems = "center",
+                            onClick = function()
+                                table.remove(points, i)
+                                state.inspectorNodeId = nil
+                                M._buildInspector(nodeRef.id)
+                            end,
+                        },
+                    },
+                })
+            end
+            -- 添加点按钮
+            table.insert(pointChildren, UI.Button {
+                text = "+ 添加路径点", fontSize = 10, height = 24, width = "100%",
+                backgroundColor = {50, 80, 60, 220}, borderRadius = 3,
+                fontColor = {150, 255, 180, 255}, justifyContent = "center", alignItems = "center",
+                marginTop = 2,
+                onClick = function()
+                    local lastPt = points[#points]
+                    local nx = lastPt and (lastPt.x + 2) or 10
+                    local ny = lastPt and lastPt.y or 5
+                    table.insert(points, { x = nx, y = ny })
+                    state.inspectorNodeId = nil
+                    M._buildInspector(nodeRef.id)
+                end,
+            })
+        end
+
+        return UI.Panel {
+            width = "100%", flexDirection = "column", gap = 2,
+            maxHeight = 200, overflow = "scroll",
+            backgroundColor = {35, 38, 48, 200}, borderRadius = 4,
+            paddingVertical = 4, paddingHorizontal = 4,
+            children = pointChildren,
+        }
+
+    elseif field.type == "audio_select" then
+        -- 音效文件选择器：显示已导入的音效列表
+        local EditorState = require("editor.EditorState")
+        local edState = EditorState.state
+        local audioList = edState.importedAudio or {}
+        local currentFile = node[field.key] or ""
+
+        local optChildren = {}
+        -- "无" 选项
+        table.insert(optChildren, UI.Button {
+            text = currentFile == "" and "▸ 未选择音效" or "▸ " .. currentFile,
+            fontSize = 10, height = 24, width = "100%",
+            backgroundColor = {45, 50, 65, 220}, borderRadius = 3,
+            fontColor = currentFile == "" and {150, 150, 170, 200} or {180, 220, 255, 255},
+            paddingLeft = 6, justifyContent = "center",
+            onClick = function()
+                -- 点击已选项时清空选择
+                if currentFile ~= "" then
+                    nodeRef[field.key] = ""
+                    state.inspectorNodeId = nil
+                    M._buildInspector(nodeRef.id)
+                end
+            end,
+        })
+
+        if #audioList > 0 then
+            for i, audio in ipairs(audioList) do
+                local audioName = audio.name or audio.path or ("音效" .. i)
+                local isActive = (currentFile == (audio.path or audio.name or ""))
+                table.insert(optChildren, UI.Button {
+                    text = audioName,
+                    fontSize = 10, height = 22, width = "100%",
+                    backgroundColor = isActive and {60, 90, 140, 220} or {50, 50, 65, 180},
+                    borderRadius = 3,
+                    fontColor = isActive and {255, 240, 150, 255} or {180, 200, 220, 220},
+                    paddingLeft = 8, justifyContent = "center",
+                    onClick = function()
+                        nodeRef[field.key] = audio.path or audio.name or ""
+                        state.inspectorNodeId = nil
+                        M._buildInspector(nodeRef.id)
+                    end,
+                })
+            end
+        else
+            table.insert(optChildren, UI.Label {
+                text = "暂无音效，请上传", fontSize = 9, fontColor = {120, 120, 140, 160},
+                paddingLeft = 6, marginTop = 2,
+            })
+        end
+
+        return UI.Panel {
+            width = "100%", flexDirection = "column", gap = 2,
+            maxHeight = 130, overflow = "scroll",
+            backgroundColor = {38, 38, 50, 200}, borderRadius = 4,
+            paddingVertical = 4, paddingHorizontal = 2,
+            children = optChildren,
+        }
     end
 
     return nil
@@ -536,14 +815,18 @@ function M.HandleInput(dt)
         state.panY = my - (my - state.panY) * ratio
     end
 
-    -- Delete 删除选中节点
+    -- Delete 删除选中节点（inspector 区域内或输入框聚焦时不触发）
     if input:GetKeyPress(KEY_DELETE) or input:GetKeyPress(KEY_BACKSPACE) then
-        if state.selectedNode and state.tree.nodes[state.selectedNode] then
-            local node = state.tree.nodes[state.selectedNode]
-            if node.type ~= "event" then
-                SN.RemoveNode(state.tree, state.selectedNode)
-                state.selectedNode = nil
-                M._destroyInspector()
+        local focused = UI.GetFocus and UI.GetFocus()
+        local isTextEditing = focused and focused.OnTextInput and focused.state and focused.state.focused
+        if not isTextEditing and not inInspector then
+            if state.selectedNode and state.tree.nodes[state.selectedNode] then
+                local node = state.tree.nodes[state.selectedNode]
+                if node.type ~= "event" then
+                    SN.RemoveNode(state.tree, state.selectedNode)
+                    state.selectedNode = nil
+                    M._destroyInspector()
+                end
             end
         end
     end
@@ -571,8 +854,10 @@ function M.HandleInput(dt)
 
         -- 上下文菜单点击
         if state.contextMenu then
-            local handled = M._handleContextMenuClick(mx, my)
-            state.contextMenu = false
+            local handled, keepOpen = M._handleContextMenuClick(mx, my)
+            if not keepOpen then
+                state.contextMenu = false
+            end
             if handled then return end
         end
 
@@ -681,46 +966,102 @@ function M._makeConnection(nodeA, portA, isOutputA, nodeB, portB, isOutputB)
 end
 
 -- ============================================================================
--- 右键菜单 - 分类（Dropdown 式）
+-- 右键菜单 - 分类（自动从 NODE_TYPES 生成，新增节点自动出现）
 -- ============================================================================
 
-local MENU_CATEGORIES = {
-    { name = "数据",   types = { "value", "string", "param", "read_item" } },
-    { name = "条件",   types = { "compare", "logic" } },
-    { name = "运算",   types = { "math", "concat" } },
-    { name = "流程",   types = { "branch", "sequence", "random", "delay", "repeat_n" } },
-    { name = "动作",   types = { "spawn", "move_obj", "set_var", "play_fx", "dialog", "damage", "win_level", "camera_zoom", "modify_item", "set_ability", "destroy_self" } },
-}
+-- 分类显示顺序（不在此列表中的分类追加到末尾）
+local MENU_CAT_ORDER = { "数据", "条件", "运算", "流程", "动作" }
+-- 不显示在菜单中的分类（入口节点由系统自动创建）
+local MENU_CAT_EXCLUDE = { ["入口"] = true }
 
-local MENU_ITEM_H = 36
-local MENU_HEADER_H = 28
-local MENU_W = 220
+local MENU_CATEGORIES  -- 延迟构建，首次打开菜单时生成
+
+local function _buildMenuCategories()
+    if MENU_CATEGORIES then return end
+    -- 按 category 聚合所有节点类型
+    local catMap = {}  -- category_name -> { nodeType1, nodeType2, ... }
+    for nodeType, def in pairs(SN.NODE_TYPES) do
+        local cat = def.category
+        if cat and not MENU_CAT_EXCLUDE[cat] then
+            if not catMap[cat] then catMap[cat] = {} end
+            catMap[cat][#catMap[cat] + 1] = nodeType
+        end
+    end
+    -- 按预定义顺序构建
+    MENU_CATEGORIES = {}
+    local added = {}
+    for _, name in ipairs(MENU_CAT_ORDER) do
+        if catMap[name] then
+            MENU_CATEGORIES[#MENU_CATEGORIES + 1] = { name = name, types = catMap[name] }
+            added[name] = true
+        end
+    end
+    -- 追加未在预定义顺序中的新分类
+    for name, types in pairs(catMap) do
+        if not added[name] then
+            MENU_CATEGORIES[#MENU_CATEGORIES + 1] = { name = name, types = types }
+        end
+    end
+end
+
+local MENU_ITEM_H = 38
+local MENU_TAB_H = 32
+local MENU_W = 240
+local MENU_TAB_PAD = 8  -- tab 区域上下内边距
+
+local function getMenuActualWidth()
+    _buildMenuCategories()
+    local tabsTotalW = MENU_TAB_PAD
+    for _, cat in ipairs(MENU_CATEGORIES) do
+        tabsTotalW = tabsTotalW + #cat.name * 14 + 16 + 4
+    end
+    tabsTotalW = tabsTotalW + MENU_TAB_PAD
+    return math.max(MENU_W, tabsTotalW)
+end
 
 local function getMenuTotalHeight()
-    local h = 8
-    for _, cat in ipairs(MENU_CATEGORIES) do
-        h = h + MENU_HEADER_H
-        h = h + #cat.types * MENU_ITEM_H
-    end
-    return h + 8
+    _buildMenuCategories()
+    local catIdx = state.menuSelectedCat or 1
+    local cat = MENU_CATEGORIES[catIdx]
+    local itemCount = cat and #cat.types or 0
+    -- tab行 + items
+    return MENU_TAB_PAD + MENU_TAB_H + MENU_TAB_PAD + itemCount * MENU_ITEM_H + MENU_TAB_PAD
 end
 
 function M._handleContextMenuClick(mx, my)
+    _buildMenuCategories()
     local menuX = state.contextX
     local menuY = state.contextY
-    local curY = menuY + 8
 
-    for _, cat in ipairs(MENU_CATEGORIES) do
-        curY = curY + MENU_HEADER_H
-        for _, nodeType in ipairs(cat.types) do
-            if mx >= menuX and mx <= menuX + MENU_W and my >= curY and my <= curY + MENU_ITEM_H then
+    -- 检查 tab 区域点击
+    local tabY = menuY + MENU_TAB_PAD
+    if my >= tabY and my <= tabY + MENU_TAB_H then
+        local tabX = menuX + MENU_TAB_PAD
+        for i, cat in ipairs(MENU_CATEGORIES) do
+            local tabW = #cat.name * 14 + 16
+            if mx >= tabX and mx <= tabX + tabW then
+                state.menuSelectedCat = i
+                return true, true  -- handled=true, keepOpen=true
+            end
+            tabX = tabX + tabW + 4
+        end
+    end
+
+    -- 检查 item 区域点击
+    local itemStartY = menuY + MENU_TAB_PAD + MENU_TAB_H + MENU_TAB_PAD
+    local catIdx = state.menuSelectedCat or 1
+    local cat = MENU_CATEGORIES[catIdx]
+    local menuW = getMenuActualWidth()
+    if cat then
+        for idx, nodeType in ipairs(cat.types) do
+            local itemY = itemStartY + (idx - 1) * MENU_ITEM_H
+            if mx >= menuX and mx <= menuX + menuW and my >= itemY and my <= itemY + MENU_ITEM_H then
                 local newNode = SN.Create(nodeType, { x = state.menuWorldX, y = state.menuWorldY })
                 SN.AddNode(state.tree, newNode)
                 state.selectedNode = newNode.id
                 M._buildInspector(newNode.id)
                 return true
             end
-            curY = curY + MENU_ITEM_H
         end
     end
     return false
@@ -1033,8 +1374,27 @@ function M._getNodeSummary(node)
         local prefix = node.damageIsHeal and "+" or "-"
         return prefix .. tostring(node.damageAmount or 10) .. " HP"
     end
+    if t == "move_obj" then
+        local idx = node.targetObjIdx or 0
+        if idx == 0 then return "未选择" end
+        local EditorState = require("editor.EditorState")
+        local edState = EditorState.state
+        local chKey = edState.chapterIdx .. "_" .. edState.levelIdx
+        local objects = edState.objects[chKey] or {}
+        local obj = objects[idx]
+        if obj then
+            local name = obj.name or obj.type or "物件"
+            if #name > 8 then name = name:sub(1, 8) .. "…" end
+            return name
+        end
+        return "#" .. idx
+    end
     if t == "camera_zoom" then
-        return tostring(node.zoomScale or 1.0) .. "x"
+        local s = tostring(node.zoomScale or 1.0) .. "x"
+        if node.zoomUsePan then
+            s = s .. string.format(" →(%.0f,%.0f)", node.zoomCenterX or 15, node.zoomCenterY or 8.75)
+        end
+        return s
     end
     if t == "read_item" then
         for _, it in ipairs(SN.ITEM_TYPES) do if it.id == node.itemName then return "$" .. it.label end end
@@ -1117,16 +1477,17 @@ end
 function M._drawContextMenu(vg)
     local mx, my = state.contextX, state.contextY
     local totalH = getMenuTotalHeight()
+    local menuW = getMenuActualWidth()
 
     -- 阴影
     nvgBeginPath(vg)
-    nvgRoundedRect(vg, mx + 2, my + 2, MENU_W, totalH, 8)
+    nvgRoundedRect(vg, mx + 2, my + 2, menuW, totalH, 8)
     nvgFillColor(vg, nvgRGBA(0, 0, 0, 100))
     nvgFill(vg)
 
     -- 背景
     nvgBeginPath(vg)
-    nvgRoundedRect(vg, mx, my, MENU_W, totalH, 8)
+    nvgRoundedRect(vg, mx, my, menuW, totalH, 8)
     nvgFillColor(vg, nvgRGBA(COL_MENU_BG[1], COL_MENU_BG[2], COL_MENU_BG[3], COL_MENU_BG[4]))
     nvgFill(vg)
     nvgStrokeColor(vg, nvgRGBA(70, 70, 85, 200))
@@ -1135,23 +1496,60 @@ function M._drawContextMenu(vg)
 
     local curMx = input.mousePosition.x
     local curMy = input.mousePosition.y
-    local curY = my + 8
 
     nvgFontFace(vg, "sans")
 
-    for _, cat in ipairs(MENU_CATEGORIES) do
-        -- 分类标题
-        nvgFontSize(vg, 13)
-        nvgFillColor(vg, nvgRGBA(COL_TEXT_HINT[1], COL_TEXT_HINT[2], COL_TEXT_HINT[3], COL_TEXT_HINT[4]))
-        nvgTextAlign(vg, NVG_ALIGN_LEFT + NVG_ALIGN_MIDDLE)
-        nvgText(vg, mx + 12, curY + MENU_HEADER_H / 2, "— " .. cat.name .. " —")
-        curY = curY + MENU_HEADER_H
+    -- 绘制分类 tab 横向排列
+    local tabX = mx + MENU_TAB_PAD
+    local tabY = my + MENU_TAB_PAD
+    local catIdx = state.menuSelectedCat or 1
 
-        for _, nodeType in ipairs(cat.types) do
-            local hovered = curMx >= mx and curMx <= mx + MENU_W and curMy >= curY and curMy <= curY + MENU_ITEM_H
+    for i, cat in ipairs(MENU_CATEGORIES) do
+        local tabW = #cat.name * 14 + 16
+        local isActive = (i == catIdx)
+        local isHovered = curMx >= tabX and curMx <= tabX + tabW and curMy >= tabY and curMy <= tabY + MENU_TAB_H
+
+        -- tab 背景
+        nvgBeginPath(vg)
+        nvgRoundedRect(vg, tabX, tabY, tabW, MENU_TAB_H, 5)
+        if isActive then
+            nvgFillColor(vg, nvgRGBA(80, 100, 160, 220))
+        elseif isHovered then
+            nvgFillColor(vg, nvgRGBA(60, 60, 90, 180))
+        else
+            nvgFillColor(vg, nvgRGBA(40, 40, 60, 150))
+        end
+        nvgFill(vg)
+
+        -- tab 文字
+        nvgFontSize(vg, 13)
+        nvgFillColor(vg, isActive and nvgRGBA(255, 255, 255, 240) or nvgRGBA(180, 180, 200, 200))
+        nvgTextAlign(vg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
+        nvgText(vg, tabX + tabW / 2, tabY + MENU_TAB_H / 2, cat.name)
+
+        tabX = tabX + tabW + 4
+    end
+
+    -- 分割线
+    local sepY = my + MENU_TAB_PAD + MENU_TAB_H + 4
+    nvgBeginPath(vg)
+    nvgMoveTo(vg, mx + 8, sepY)
+    nvgLineTo(vg, mx + menuW - 8, sepY)
+    nvgStrokeColor(vg, nvgRGBA(80, 80, 110, 150))
+    nvgStrokeWidth(vg, 1)
+    nvgStroke(vg)
+
+    -- 绘制当前分类的节点列表
+    local itemStartY = my + MENU_TAB_PAD + MENU_TAB_H + MENU_TAB_PAD
+    local cat = MENU_CATEGORIES[catIdx]
+    if cat then
+        for idx, nodeType in ipairs(cat.types) do
+            local itemY = itemStartY + (idx - 1) * MENU_ITEM_H
+            local hovered = curMx >= mx and curMx <= mx + menuW and curMy >= itemY and curMy <= itemY + MENU_ITEM_H
+
             if hovered then
                 nvgBeginPath(vg)
-                nvgRoundedRect(vg, mx + 4, curY + 2, MENU_W - 8, MENU_ITEM_H - 4, 4)
+                nvgRoundedRect(vg, mx + 4, itemY + 2, menuW - 8, MENU_ITEM_H - 4, 5)
                 nvgFillColor(vg, nvgRGBA(COL_MENU_HOVER[1], COL_MENU_HOVER[2], COL_MENU_HOVER[3], COL_MENU_HOVER[4]))
                 nvgFill(vg)
             end
@@ -1159,16 +1557,14 @@ function M._drawContextMenu(vg)
             local nodeMeta = SN.NODE_TYPES[nodeType] or { label = "?", color = {128,128,128}, icon = "?" }
             -- 色点
             nvgBeginPath(vg)
-            nvgCircle(vg, mx + 20, curY + MENU_ITEM_H / 2, 5)
+            nvgCircle(vg, mx + 22, itemY + MENU_ITEM_H / 2, 6)
             nvgFillColor(vg, nvgRGBA(nodeMeta.color[1], nodeMeta.color[2], nodeMeta.color[3], 220))
             nvgFill(vg)
             -- 文字
-            nvgFontSize(vg, 14)
+            nvgFontSize(vg, 15)
             nvgFillColor(vg, nvgRGBA(COL_TEXT[1], COL_TEXT[2], COL_TEXT[3], COL_TEXT[4]))
             nvgTextAlign(vg, NVG_ALIGN_LEFT + NVG_ALIGN_MIDDLE)
-            nvgText(vg, mx + 34, curY + MENU_ITEM_H / 2, nodeMeta.label)
-
-            curY = curY + MENU_ITEM_H
+            nvgText(vg, mx + 38, itemY + MENU_ITEM_H / 2, nodeMeta.label)
         end
     end
 end

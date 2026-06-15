@@ -55,10 +55,11 @@ M.NODE_TYPES = {
     random     = { label = "随机选择",  color = {180, 100, 180}, category = "流程",   desc = "加权随机", icon = "?" },
     delay      = { label = "延迟",      color = {130, 130, 180}, category = "流程",   desc = "延迟N秒后执行", icon = "⏱" },
     repeat_n   = { label = "重复",      color = {150, 180, 90},  category = "流程",   desc = "重复N次", icon = "↺" },
+    break_flow = { label = "中断",      color = {180, 130, 60},  category = "流程",   desc = "中断执行，等待触发器再次触发后继续", icon = "⏸" },
 
     -- === 动作 (关卡核心) ===
     spawn      = { label = "生成实体",  color = {50, 170, 210},  category = "动作",   desc = "生成敌人/道具/特效", icon = "★" },
-    move_obj   = { label = "移动对象",  color = {80, 200, 160},  category = "动作",   desc = "平移/旋转对象", icon = "→" },
+    move_obj   = { label = "移动对象",  color = {80, 200, 160},  category = "动作",   desc = "平移/旋转/透明度", icon = "→" },
     set_var    = { label = "设置变量",  color = {200, 180, 80},  category = "动作",   desc = "修改运行时参数", icon = "=" },
     play_fx    = { label = "播放效果",  color = {220, 130, 180}, category = "动作",   desc = "音效/震屏/粒子/提示", icon = "♪" },
     dialog     = { label = "弹出对话",  color = {100, 180, 220}, category = "动作",   desc = "显示剧情/提示文字", icon = "💬" },
@@ -68,6 +69,8 @@ M.NODE_TYPES = {
     modify_item= { label = "修改物品",  color = {220, 180, 50},  category = "动作",   desc = "增减玩家物品数量", icon = "📦" },
     set_ability= { label = "设置能力",  color = {140, 200, 80},  category = "动作",   desc = "启用/禁用玩家能力", icon = "⚡" },
     destroy_self={ label = "销毁自身", color = {180, 60, 60},   category = "动作",   desc = "销毁触发此策略的对象", icon = "💥" },
+    teleport_player = { label = "传送玩家", color = {120, 80, 220}, category = "动作", desc = "将玩家传送到指定坐标", icon = "⚡" },
+    reset_trigger   = { label = "重置触发器", color = {200, 150, 60}, category = "动作", desc = "重置目标触发器为未触发状态", icon = "↻" },
 
     -- === 数据(物品) ===
     read_item  = { label = "读取物品",  color = {200, 170, 50},  category = "数据",   desc = "读取玩家物品数量", icon = "🔎" },
@@ -132,12 +135,16 @@ M.PORT_DEFS = {
         inputs = { { name = "▶", type = "flow" }, { name = "次数", type = "number", field = "count" } },
         outputs = { { name = "循环体", type = "flow", field = "bodyNode" }, { name = "完成后", type = "flow", field = "outputNode" } },
     },
+    break_flow = {
+        inputs = { { name = "▶", type = "flow" } },
+        outputs = { { name = "▶", type = "flow", field = "outputNode" } },
+    },
     spawn = {
         inputs = { { name = "▶", type = "flow" }, { name = "X", type = "number", field = "spawnX" }, { name = "Y", type = "number", field = "spawnY" } },
         outputs = { { name = "▶", type = "flow", field = "outputNode" } },
     },
     move_obj = {
-        inputs = { { name = "▶", type = "flow" }, { name = "X偏移", type = "number", field = "offsetX" }, { name = "Y偏移", type = "number", field = "offsetY" } },
+        inputs = { { name = "▶", type = "flow" } },
         outputs = { { name = "▶", type = "flow", field = "outputNode" } },
     },
     set_var = {
@@ -179,6 +186,14 @@ M.PORT_DEFS = {
     destroy_self = {
         inputs = { { name = "▶", type = "flow" } },
         outputs = {},
+    },
+    teleport_player = {
+        inputs = { { name = "▶", type = "flow" }, { name = "X", type = "number", field = "targetX" }, { name = "Y", type = "number", field = "targetY" } },
+        outputs = { { name = "▶", type = "flow", field = "outputNode" } },
+    },
+    reset_trigger = {
+        inputs = { { name = "▶", type = "flow" } },
+        outputs = { { name = "▶", type = "flow", field = "outputNode" } },
     },
 }
 
@@ -254,6 +269,32 @@ M.FX_TYPES = {
     { id = "slow_motion",    label = "慢动作" },
 }
 
+-- 移动路径类型
+M.PATH_TYPES = {
+    { id = "linear",   label = "直线" },
+    { id = "bezier",   label = "贝塞尔曲线" },
+    { id = "circle",   label = "圆形轨迹" },
+    { id = "custom",   label = "自定义路径点" },
+}
+
+-- 粒子移动方向
+M.PARTICLE_DIRS = {
+    { id = "up",       label = "向上" },
+    { id = "down",     label = "向下" },
+    { id = "left",     label = "向左" },
+    { id = "right",    label = "向右" },
+    { id = "explode",  label = "爆散" },
+}
+
+-- 闪光颜色预设
+M.FLASH_COLORS = {
+    { id = "white",  label = "白色" },
+    { id = "red",    label = "红色" },
+    { id = "blue",   label = "蓝色" },
+    { id = "yellow", label = "黄色" },
+    { id = "green",  label = "绿色" },
+}
+
 -- 对话类型
 M.DIALOG_STYLES = {
     { id = "popup",      label = "居中弹窗" },
@@ -314,6 +355,15 @@ M.ABILITY_TYPES = {
     { id = "hang_glide", label = "滞空滑翔" },
 }
 
+-- 触发方式（用于 reset_trigger 节点）
+M.TRIGGER_METHODS = {
+    { id = "keep",     label = "保持不变" },
+    { id = "touch",    label = "触碰" },
+    { id = "interact", label = "交互" },
+    { id = "attack",   label = "攻击" },
+    { id = "none",     label = "禁用(设为无)" },
+}
+
 -- ============================================================================
 -- Inspector 属性定义（每种节点的可编辑属性）
 -- ============================================================================
@@ -355,16 +405,25 @@ M.INSPECTOR_FIELDS = {
     repeat_n = {
         { key = "repeatCount", label = "重复次数", type = "int", min = 1, max = 100, step = 1, default = 3 },
     },
+    break_flow = {},
     spawn = {
         { key = "spawnType", label = "实体类型", type = "select", options = "SPAWN_TYPES", default = "enemy_melee" },
         { key = "spawnCount", label = "数量", type = "int", min = 1, max = 20, step = 1, default = 1 },
         { key = "spawnDir", label = "朝向", type = "select", options = "SPAWN_DIRS", default = "auto" },
     },
     move_obj = {
-        { key = "targetId", label = "目标ID", type = "text", default = "" },
-        { key = "moveDuration", label = "持续(秒)", type = "float", min = 0.1, max = 30, step = 0.1, default = 1.0 },
+        { key = "targetObjIdx", label = "目标物件", type = "obj_select", default = 0 },
+        { key = "pathType", label = "路径类型", type = "select", options = "PATH_TYPES", default = "linear" },
+        { key = "pathPoints", label = "路径编辑", type = "path_editor", default = {} },
+        { key = "moveDuration", label = "单程时间(秒)", type = "float", min = 0.1, max = 60, step = 0.1, default = 1.0 },
         { key = "moveEase", label = "缓动", type = "select", options = "EASE_TYPES", default = "easeOut" },
+        { key = "moveRoundTrip", label = "往返移动", type = "bool", default = false },
+        { key = "moveLoop", label = "循环执行", type = "bool", default = false },
+        { key = "moveRepeatCount", label = "执行次数", type = "int", min = 1, max = 999, step = 1, default = 1 },
         { key = "rotationDeg", label = "旋转(度)", type = "float", min = -360, max = 360, step = 5, default = 0 },
+        { key = "flipByMoveDir", label = "朝向跟随移动方向", type = "bool", default = false },
+        { key = "opacityTarget", label = "目标透明度", type = "float", min = 0, max = 1, step = 0.05, default = 1.0 },
+        { key = "opacityDuration", label = "渐变时间(秒)", type = "float", min = 0, max = 60, step = 0.1, default = 0.5 },
     },
     set_var = {
         { key = "varName", label = "变量名", type = "select", options = "RUNTIME_PARAMS", default = "custom1" },
@@ -372,8 +431,26 @@ M.INSPECTOR_FIELDS = {
     },
     play_fx = {
         { key = "fxType", label = "效果类型", type = "select", options = "FX_TYPES", default = "sound" },
-        { key = "fxParam", label = "参数", type = "text", default = "" },
-        { key = "fxIntensity", label = "强度", type = "float", min = 0, max = 10, step = 0.1, default = 1.0 },
+        -- 播放音效 子参数
+        { key = "soundFile", label = "音效文件", type = "audio_select", default = "", showWhen = { fxType = "sound" } },
+        { key = "soundVolume", label = "音量", type = "float", min = 0, max = 1, step = 0.05, default = 1.0, showWhen = { fxType = "sound" } },
+        -- 相机抖动 子参数
+        { key = "shakeDuration", label = "持续时间(秒)", type = "float", min = 0.1, max = 5, step = 0.1, default = 0.3, showWhen = { fxType = "camera_shake" } },
+        { key = "shakeIntensity", label = "强度", type = "float", min = 0.1, max = 10, step = 0.1, default = 1.0, showWhen = { fxType = "camera_shake" } },
+        -- 全屏闪光 子参数
+        { key = "flashColor", label = "闪光颜色", type = "select", options = "FLASH_COLORS", default = "white", showWhen = { fxType = "screen_flash" } },
+        { key = "flashDuration", label = "持续时间(秒)", type = "float", min = 0.05, max = 2, step = 0.05, default = 0.2, showWhen = { fxType = "screen_flash" } },
+        -- 浮动文字 子参数
+        { key = "floatText", label = "文字内容", type = "text", default = "", showWhen = { fxType = "floating_text" } },
+        { key = "floatColor", label = "文字颜色", type = "select", options = "FLASH_COLORS", default = "white", showWhen = { fxType = "floating_text" } },
+        { key = "floatSize", label = "字号", type = "int", min = 12, max = 72, step = 2, default = 24, showWhen = { fxType = "floating_text" } },
+        -- 粒子效果 子参数
+        { key = "particleDir", label = "粒子方向", type = "select", options = "PARTICLE_DIRS", default = "up", showWhen = { fxType = "particle" } },
+        { key = "particleCount", label = "粒子数量", type = "int", min = 1, max = 100, step = 1, default = 10, showWhen = { fxType = "particle" } },
+        { key = "particleSpeed", label = "粒子速度", type = "float", min = 0.1, max = 20, step = 0.1, default = 3.0, showWhen = { fxType = "particle" } },
+        -- 慢动作 子参数
+        { key = "slowFactor", label = "慢动作倍率", type = "float", min = 0.01, max = 1.0, step = 0.05, default = 0.3, showWhen = { fxType = "slow_motion" } },
+        { key = "slowDuration", label = "持续时间(秒)", type = "float", min = 0.1, max = 10, step = 0.1, default = 1.0, showWhen = { fxType = "slow_motion" } },
     },
     dialog = {
         { key = "dialogText", label = "对话内容", type = "text", default = "你好！" },
@@ -390,8 +467,15 @@ M.INSPECTOR_FIELDS = {
     },
     camera_zoom = {
         { key = "zoomScale", label = "缩放倍数", type = "float", min = 0.1, max = 5.0, step = 0.1, default = 1.0 },
+        { key = "zoomUsePan", label = "平移镜头到中心", type = "bool", default = false },
+        { key = "zoomCenterX", label = "镜头中心X(米)", type = "float", min = 0, max = 100, step = 0.5, default = 15.0, showWhen = { zoomUsePan = true } },
+        { key = "zoomCenterY", label = "镜头中心Y(米)", type = "float", min = 0, max = 100, step = 0.5, default = 8.75, showWhen = { zoomUsePan = true } },
         { key = "zoomDuration", label = "过渡时间(秒)", type = "float", min = 0, max = 10, step = 0.1, default = 0.5 },
         { key = "zoomEase", label = "缓动", type = "select", options = "EASE_TYPES", default = "easeOut" },
+        { key = "zoomAutoRestore", label = "自动恢复", type = "bool", default = false },
+        { key = "zoomHoldDuration", label = "持续时间(秒)", type = "float", min = 0, max = 60, step = 0.5, default = 3.0, showWhen = { zoomAutoRestore = true } },
+        { key = "zoomRestoreDuration", label = "恢复过渡(秒)", type = "float", min = 0, max = 10, step = 0.1, default = 0.5, showWhen = { zoomAutoRestore = true } },
+        { key = "zoomRestoreEase", label = "恢复缓动", type = "select", options = "EASE_TYPES", default = "easeOut", showWhen = { zoomAutoRestore = true } },
     },
     read_item = {
         { key = "itemName", label = "物品类型", type = "select", options = "ITEM_TYPES", default = "light_fragment" },
@@ -405,6 +489,14 @@ M.INSPECTOR_FIELDS = {
         { key = "abilityEnabled", label = "启用", type = "bool", default = true },
     },
     destroy_self = {},
+    teleport_player = {
+        { key = "targetX", label = "目标X", type = "float", min = 0, max = 200, step = 0.5, default = 15.0 },
+        { key = "targetY", label = "目标Y", type = "float", min = 0, max = 200, step = 0.5, default = 8.0 },
+    },
+    reset_trigger = {
+        { key = "resetTargetIdx", label = "目标触发器", type = "obj_select", default = 0 },
+        { key = "resetMethod", label = "重置后触发方式", type = "select", options = "TRIGGER_METHODS", default = "keep" },
+    },
 }
 
 -- ============================================================================
@@ -429,18 +521,21 @@ local NODE_DEFAULTS = {
     random    = { children = {}, weights = {} },
     delay     = { delaySeconds = 1.0, duration = nil, outputNode = nil },
     repeat_n  = { repeatCount = 3, count = nil, bodyNode = nil, outputNode = nil },
+    break_flow = { outputNode = nil },
     spawn     = { spawnType = "enemy_melee", spawnCount = 1, spawnDir = "auto", spawnX = nil, spawnY = nil, outputNode = nil },
-    move_obj  = { targetId = "", moveDuration = 1.0, moveEase = "easeOut", rotationDeg = 0, offsetX = nil, offsetY = nil, outputNode = nil },
+    move_obj  = { targetObjIdx = 0, pathType = "linear", pathPoints = {}, moveDuration = 1.0, moveEase = "easeOut", moveRoundTrip = false, moveLoop = false, moveRepeatCount = 1, rotationDeg = 0, flipByMoveDir = false, opacityTarget = 1.0, opacityDuration = 0.5, outputNode = nil },
     set_var   = { varName = "custom1", setMode = "set", newValue = nil, outputNode = nil },
-    play_fx   = { fxType = "sound", fxParam = "", fxIntensity = 1.0, outputNode = nil },
+    play_fx   = { fxType = "sound", soundFile = "", soundVolume = 1.0, shakeDuration = 0.3, shakeIntensity = 1.0, flashColor = "white", flashDuration = 0.2, floatText = "", floatColor = "white", floatSize = 24, particleDir = "up", particleCount = 10, particleSpeed = 3.0, slowFactor = 0.3, slowDuration = 1.0, outputNode = nil },
     dialog    = { dialogText = "你好！", dialogStyle = "popup", dialogDuration = 3.0, dialogSpeaker = "", textInput = nil, outputNode = nil },
     damage    = { damageAmount = 10, damageIsHeal = false, amount = nil, outputNode = nil },
     win_level = { winType = "win" },
-    camera_zoom = { zoomScale = 1.0, zoomDuration = 0.5, zoomEase = "easeOut", zoomLevel = nil, outputNode = nil },
+    camera_zoom = { zoomScale = 1.0, zoomUsePan = false, zoomCenterX = 15.0, zoomCenterY = 8.75, zoomDuration = 0.5, zoomEase = "easeOut", zoomAutoRestore = false, zoomHoldDuration = 3.0, zoomRestoreDuration = 0.5, zoomRestoreEase = "easeOut", zoomLevel = nil, outputNode = nil },
     read_item   = { itemName = "light_fragment" },
     modify_item = { itemName = "light_fragment", itemOp = "add", itemAmount = nil, outputNode = nil },
     set_ability = { abilityName = "hang_glide", abilityEnabled = true, outputNode = nil },
     destroy_self= {},
+    teleport_player = { targetX = 15.0, targetY = 8.0, outputNode = nil },
+    reset_trigger   = { resetTargetIdx = 0, resetMethod = "keep", outputNode = nil },
 }
 
 ---@param nodeType string
@@ -505,10 +600,15 @@ function M.RemoveNode(tree, nodeId)
     local node = tree.nodes[nodeId]
     if not node or node.type == "event" then return end
     tree.nodes[nodeId] = nil
-    -- 清理所有引用
+    -- 清理所有引用（跳过"存储数值但不是节点连接"的字段）
     local skipKeys = { id = true, x = true, y = true, value = true, delaySeconds = true,
         repeatCount = true, spawnCount = true, damageAmount = true, fxIntensity = true,
-        moveDuration = true, rotationDeg = true, dialogDuration = true }
+        moveDuration = true, rotationDeg = true, dialogDuration = true,
+        targetObjIdx = true, moveRepeatCount = true, targetX = true, targetY = true,
+        itemAmount = true, zoomScale = true, zoomDuration = true,
+        soundVolume = true, shakeDuration = true, shakeIntensity = true,
+        flashDuration = true, floatSize = true, particleCount = true,
+        particleSpeed = true, slowFactor = true, slowDuration = true }
     for _, n in pairs(tree.nodes) do
         for k, v in pairs(n) do
             if type(v) == "number" and v == nodeId and not skipKeys[k] then
@@ -732,7 +832,7 @@ function M.Evaluate(tree, nodeId, context)
     -- 动作节点返回 action 描述
     if t == "spawn" or t == "move_obj" or t == "set_var" or t == "play_fx"
        or t == "dialog" or t == "damage" or t == "win_level"
-       or t == "delay" or t == "repeat_n" then
+       or t == "delay" or t == "repeat_n" or t == "teleport_player" then
         return { nodeType = t, node = node }
     end
 
@@ -777,12 +877,40 @@ function M._collectActions(tree, nodeId, context, actions)
             if roll <= accum then M._collectActions(tree, children[i], context, actions); return end
         end
         M._collectActions(tree, children[#children], context, actions)
-    elseif t == "delay" or t == "repeat_n" or t == "spawn" or t == "move_obj"
-        or t == "set_var" or t == "play_fx" or t == "dialog"
-        or t == "damage" or t == "win_level" or t == "camera_zoom"
-        or t == "modify_item" or t == "set_ability" or t == "destroy_self" then
-        -- 动作节点: 收集自身，然后继续
-        table.insert(actions, { nodeType = t, node = node })
+    elseif t == "repeat_n" then
+        -- 重复节点: 将循环体展开 N 次，然后继续完成后端口
+        local count = node.count or node.repeatCount or 3
+        -- count 可能连接了数据节点
+        if type(count) == "number" and tree.nodes[count] then
+            count = tonumber(M.Evaluate(tree, count, context)) or 3
+        end
+        count = math.max(1, math.min(tonumber(count) or 3, 100))  -- 限制上界防死循环
+        for _ = 1, count do
+            if node.bodyNode then
+                M._collectActions(tree, node.bodyNode, context, actions)
+            end
+        end
+        if node.outputNode then
+            M._collectActions(tree, node.outputNode, context, actions)
+        end
+    else
+        -- 通用动作节点（OCP: 新增动作节点自动被收集，无需在此维护列表）
+        -- 收集自身，对数据端口求值后存入副本
+        local resolved = {}
+        for k, v in pairs(node) do resolved[k] = v end
+        -- 求值所有数据类型的端口输入（field 值可能是连接的节点ID）
+        local ports = M.PORT_DEFS[t]
+        if ports and ports.inputs then
+            for _, inp in ipairs(ports.inputs) do
+                if inp.type ~= "flow" and inp.field then
+                    local connId = node[inp.field]
+                    if connId and type(connId) == "number" and tree.nodes[connId] then
+                        resolved[inp.field] = M.Evaluate(tree, connId, context)
+                    end
+                end
+            end
+        end
+        table.insert(actions, { nodeType = t, node = resolved })
         if node.outputNode then
             M._collectActions(tree, node.outputNode, context, actions)
         end
@@ -841,6 +969,39 @@ function M.Deserialize(data)
             node.moveDuration = 0
             node.moveEase = "linear"
             node.rotationDeg = 0
+        end
+        -- 兼容旧数据: move_obj 的 targetId(字符串) → targetObjIdx(索引)
+        if node.type == "move_obj" and node.targetId ~= nil and node.targetObjIdx == nil then
+            node.targetObjIdx = 0  -- 旧数据无法自动映射索引，需用户重新选择
+            node.targetId = nil
+            if not node.pathPoints then node.pathPoints = {} end
+            if not node.pathType then node.pathType = "linear" end
+            if not node.moveRoundTrip then node.moveRoundTrip = false end
+            if not node.moveLoop then node.moveLoop = false end
+            if not node.moveRepeatCount then node.moveRepeatCount = 1 end
+        end
+        -- 兼容旧数据: camera_zoom 补充新字段
+        if node.type == "camera_zoom" and node.zoomUsePan == nil then
+            node.zoomUsePan = false
+            node.zoomCenterX = 15.0
+            node.zoomCenterY = 8.75
+        end
+        -- 兼容旧数据: play_fx 补充新子参数默认值
+        if node.type == "play_fx" then
+            if node.soundFile == nil then node.soundFile = "" end
+            if node.soundVolume == nil then node.soundVolume = 1.0 end
+            if node.shakeDuration == nil then node.shakeDuration = 0.3 end
+            if node.shakeIntensity == nil then node.shakeIntensity = 1.0 end
+            if node.flashColor == nil then node.flashColor = "white" end
+            if node.flashDuration == nil then node.flashDuration = 0.2 end
+            if node.floatText == nil then node.floatText = "" end
+            if node.floatColor == nil then node.floatColor = "white" end
+            if node.floatSize == nil then node.floatSize = 24 end
+            if node.particleDir == nil then node.particleDir = "up" end
+            if node.particleCount == nil then node.particleCount = 10 end
+            if node.particleSpeed == nil then node.particleSpeed = 3.0 end
+            if node.slowFactor == nil then node.slowFactor = 0.3 end
+            if node.slowDuration == nil then node.slowDuration = 1.0 end
         end
         tree.nodes[node.id] = node
     end

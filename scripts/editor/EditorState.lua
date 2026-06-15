@@ -88,7 +88,12 @@ M.state = {
     nvgTextures = {},          -- path -> nvg image handle
     -- 手动导入的贴图素材列表
     customTextures = {},       -- { {path=..., name=..., cat=...}, ... }
+    -- 导入的音效文件列表（供节点编辑器"播放音效"使用）
+    importedAudio = {},        -- { {path=..., name=...}, ... }
     texCatExpanded = { bg = true, tile = true, seq = true, solid = true, other = true },  -- 素材分类展开状态
+    bgLayersExpanded = true,       -- 背景图层列表是否展开
+    objTexLayersExpanded = true,   -- 物件贴图图层列表是否展开
+    objListExpanded = true,        -- 物件列表是否展开
     -- 镜头范围框（世界坐标，Y-up）
     -- 默认略小于编辑器世界，确保框在画布内可见
     cameraBounds = { x = 2, y = 1, w = 26, h = 15.5 },
@@ -113,6 +118,12 @@ M.state = {
     colorPickerS = 1.0,        -- HSV: Saturation (0~1)
     colorPickerV = 1.0,        -- HSV: Value (0~1)
     colorHistory = {},         -- 最近10个使用的颜色 {{r,g,b,a}, ...}
+    -- 预制体系统
+    prefabMode = nil,          -- nil=正常, "place"=放置预制体模式
+    prefabData = nil,          -- 当前选中待放置的预制体数据
+    prefabPanelOpen = false,   -- 预制体库面板是否展开
+    multiSelect = {},          -- 多选对象索引集合 { [idx]=true, ... }
+    multiSelectActive = false, -- 是否处于多选模式
 }
 
 -- ============================================================================
@@ -126,6 +137,7 @@ M.TOOLS = {
     { id = "executor",  name = "执行器", color = {50, 160, 220, 255} },
     { id = "ground",    name = "地面", color = {140, 100, 60, 255} },
     { id = "texture",   name = "贴图", color = {180, 100, 200, 255} },
+    { id = "prefab",    name = "预制体", color = {100, 200, 180, 255} },
     { id = "delete",    name = "删除", color = {180, 40, 40, 200} },
 }
 

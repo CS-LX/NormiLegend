@@ -38,3 +38,7 @@ tools/
 urhox-libs/
 AGENTS.md
 CLAUDE.md
+
+# Large binary assets (too big for GitHub)
+assets/video/
+_uploads/

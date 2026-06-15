@@ -15,6 +15,159 @@ local P = {}
 local levelEditor_ = EditorState.state
 
 -- ============================================================================
+-- 缓动函数 & 路径求值工具
+-- ============================================================================
+
+local EASE_FNS = {
+    linear    = function(t) return t end,
+    easeIn    = function(t) return t * t end,
+    easeOut   = function(t) return 1 - (1 - t) * (1 - t) end,
+    easeInOut = function(t)
+        if t < 0.5 then return 2 * t * t
+        else return 1 - 2 * (1 - t) * (1 - t) end
+    end,
+}
+
+--- 根据路径类型和 pathPoints 创建求值函数 f(t) -> worldX, worldY
+--- pathPoints 中的 x/y 是绝对世界目标坐标（Y-up），不是偏移量
+--- @param pathType string
+--- @param pathPoints table
+--- @param originX number 物件初始世界坐标 X
+--- @param originY number 物件初始世界坐标 Y
+--- @return function evaluator(t:0-1) -> x, y
+local function createPathEvaluator(pathType, pathPoints, originX, originY)
+    if pathType == "linear" then
+        -- pathPoints[1] = {x=目标X, y=目标Y}
+        local pt = pathPoints[1] or { x = originX, y = originY }
+        local endX = pt.x or originX
+        local endY = pt.y or originY
+        return function(t)
+            return originX + (endX - originX) * t, originY + (endY - originY) * t
+        end
+    elseif pathType == "bezier" then
+        -- pathPoints[1] = {x, y, cx, cy} (目标坐标 + 控制点坐标，均为绝对坐标)
+        local pt = pathPoints[1] or { x = originX, y = originY, cx = originX, cy = originY }
+        local endX = pt.x or originX
+        local endY = pt.y or originY
+        local ctrlX = pt.cx or originX
+        local ctrlY = pt.cy or originY
+        return function(t)
+            -- 二次贝塞尔: B(t) = (1-t)^2*P0 + 2(1-t)t*P1 + t^2*P2
+            local u = 1 - t
+            local x = u * u * originX + 2 * u * t * ctrlX + t * t * endX
+            local y = u * u * originY + 2 * u * t * ctrlY + t * t * endY
+            return x, y
+        end
+    elseif pathType == "circle" then
+        -- pathPoints[1] = {radius, startAngle(deg), endAngle(deg)} (圆弧保持相对方式)
+        local pt = pathPoints[1] or { radius = 2, startAngle = 0, endAngle = 360 }
+        local r = pt.radius or 2
+        local sa = math.rad(pt.startAngle or 0)
+        local ea = math.rad(pt.endAngle or 360)
+        return function(t)
+            local angle = sa + (ea - sa) * t
+            return originX + math.cos(angle) * r, originY + math.sin(angle) * r
+        end
+    elseif pathType == "custom" then
+        -- pathPoints = 多个途经点，绝对世界坐标
+        if #pathPoints == 0 then
+            return function(_) return originX, originY end
+        end
+        -- 构建世界坐标列表（含起始点）
+        local pts = { { x = originX, y = originY } }
+        for _, p in ipairs(pathPoints) do
+            table.insert(pts, { x = p.x or originX, y = p.y or originY })
+        end
+        -- 计算各段长度
+        local segLens = {}
+        local totalLen = 0
+        for i = 2, #pts do
+            local dx = pts[i].x - pts[i-1].x
+            local dy = pts[i].y - pts[i-1].y
+            local len = math.sqrt(dx * dx + dy * dy)
+            segLens[i-1] = len
+            totalLen = totalLen + len
+        end
+        if totalLen == 0 then
+            return function(_) return originX, originY end
+        end
+        return function(t)
+            local dist = t * totalLen
+            local accum = 0
+            for i = 1, #segLens do
+                if accum + segLens[i] >= dist then
+                    local segT = (dist - accum) / segLens[i]
+                    local ax, ay = pts[i].x, pts[i].y
+                    local bx, by = pts[i+1].x, pts[i+1].y
+                    return ax + (bx - ax) * segT, ay + (by - ay) * segT
+                end
+                accum = accum + segLens[i]
+            end
+            return pts[#pts].x, pts[#pts].y
+        end
+    end
+    -- fallback
+    return function(_) return originX, originY end
+end
+
+--- 粒子方向映射
+local PARTICLE_DIR_MAP = {
+    up    = { x = 0, y = 1 },
+    down  = { x = 0, y = -1 },
+    left  = { x = -1, y = 0 },
+    right = { x = 1, y = 0 },
+    radial= { x = 0, y = 0 },  -- 特殊：随机方向
+}
+
+--- 颜色名称映射
+local FLASH_COLOR_MAP = {
+    white  = { 255, 255, 255 },
+    red    = { 255, 60, 60 },
+    blue   = { 80, 140, 255 },
+    green  = { 60, 255, 100 },
+    yellow = { 255, 240, 60 },
+}
+
+-- ============================================================================
+-- 碰撞形状工厂（OCP: 新增形状只需在此 table 加一行）
+-- ============================================================================
+
+local SHAPE_CREATORS = {
+    box = function(node, obj)
+        local shape = node:CreateComponent("CollisionBox2D")
+        shape:SetSize(obj.w, obj.h)
+        return shape
+    end,
+
+    circle = function(node, obj)
+        local shape = node:CreateComponent("CollisionCircle2D")
+        shape.radius = obj.circleRadius or (math.min(obj.w, obj.h) / 2)
+        return shape
+    end,
+
+}
+
+--- 根据 obj.collisionShape 创建碰撞体（替换硬编码 CollisionBox2D）
+--- @param node any Urho2D node
+--- @param obj table 物件数据
+--- @return any|nil shape component
+local function createCollisionShape(node, obj)
+    local shapeType = obj.collisionShape or "box"
+    local creator = SHAPE_CREATORS[shapeType]
+    if not creator then
+        print("[WARN] 未知碰撞形状: " .. tostring(shapeType) .. ", fallback to box")
+        creator = SHAPE_CREATORS.box
+    end
+    local shape = creator(node, obj)
+    if shape then
+        shape.friction = obj.friction or 0.3
+        shape.restitution = obj.restitution or 0.0
+        shape.categoryBits = 1
+    end
+    return shape
+end
+
+-- ============================================================================
 -- 滞空滑翔策略接口
 -- 通过替换 P.hangGlideStrategy 可自定义触发条件
 -- ============================================================================
@@ -122,11 +275,7 @@ function P.StartPreview()
             wantCollision = (obj.type ~= "trigger")
         end
         if wantCollision then
-            local shape = node:CreateComponent("CollisionBox2D")
-            shape:SetSize(obj.w, obj.h)
-            shape.friction = 0.3
-            shape.restitution = 0.0
-            shape.categoryBits = 1
+            createCollisionShape(node, obj)
         end
 
         table.insert(previewNodes, node)
@@ -202,6 +351,18 @@ function P.StartPreview()
     levelEditor_.previewInteractIdx = nil
     levelEditor_.previewItems = {}          -- 物品背包 { [itemName] = count }
     levelEditor_.previewDestroyedSet = {}   -- 被 destroy_self 销毁的对象索引集合
+
+    -- 动作节点运行时状态
+    levelEditor_.previewDelayedQueues = {}  -- 延迟执行队列 { {actions, startIdx, timer, context, trigObjIdx} }
+    levelEditor_.previewBreakContinuations = {} -- 中断续集 { [trigObjIdx] = {actions, startIdx, context} }
+    levelEditor_.previewBreakReenterSet = {}    -- break_flow 要求玩家先离开再重入才可触发 { [trigIdx] = true }
+    levelEditor_.previewMotions = {}        -- 移动对象任务队列
+    levelEditor_.previewCameraFx = {}       -- 相机效果队列（抖动等）
+    levelEditor_.previewCameraZoom = nil    -- 当前镜头缩放/平移任务
+    levelEditor_.previewScreenFlash = nil   -- 全屏闪光 {color, duration, elapsed}
+    levelEditor_.previewParticles = {}      -- 活跃粒子列表
+    levelEditor_.previewSlowMotion = nil    -- 慢动作 {factor, duration, elapsed}
+    levelEditor_.previewBaseOrthoSize = C.SCREEN_HEIGHT / C.PIXELS_PER_UNIT  -- 默认视野高度
 
     -- 将攻击模式的触发器注册为 Targetable 可索敌目标
     local Targetable = require("Targetable")
@@ -361,6 +522,16 @@ function P.StopPreview()
     levelEditor_.previewGroundContacts = 0
     levelEditor_.previewNodes = {}
 
+    -- 清除动作节点运行时状态
+    levelEditor_.previewMotions = {}
+    levelEditor_.previewObjFlipH = {}
+    levelEditor_.previewObjOpacity = {}
+    levelEditor_.previewCameraFx = {}
+    levelEditor_.previewCameraZoom = nil
+    levelEditor_.previewScreenFlash = nil
+    levelEditor_.previewParticles = {}
+    levelEditor_.previewSlowMotion = nil
+
     -- 重置所有动作状态（避免预览中的状态残留到主游戏）
     S.isAttacking = false
     S.isBlocking = false
@@ -449,11 +620,7 @@ function P.RefreshPreviewTerrain()
             wantCollision = (obj.type ~= "trigger")
         end
         if wantCollision then
-            local shape = node:CreateComponent("CollisionBox2D")
-            shape:SetSize(obj.w, obj.h)
-            shape.friction = 0.3
-            shape.restitution = 0.0
-            shape.categoryBits = 1
+            createCollisionShape(node, obj)
         end
 
         table.insert(levelEditor_.previewNodes, node)
@@ -473,6 +640,24 @@ function P.UpdatePreview(dt)
     -- 让 Combat 系统使用预览玩家节点（主循环被 showMainMenu 跳过）
     S.playerNode = playerNode
 
+    -- 慢动作：缩放 dt
+    if levelEditor_.previewSlowMotion then
+        local sm = levelEditor_.previewSlowMotion
+        sm.elapsed = (sm.elapsed or 0) + dt  -- 用真实dt计时
+        if sm.elapsed >= sm.duration then
+            levelEditor_.previewSlowMotion = nil
+        else
+            dt = dt * sm.factor
+        end
+    end
+
+    -- 延迟动作队列更新
+    P._updateDelayedQueues(dt)
+    -- 运动动画更新
+    P._updateMotions(dt)
+    -- 粒子更新
+    P._updateParticles(dt)
+
     -- ESC退出预览
     if input:GetKeyPress(KEY_ESCAPE) then
         P.StopPreview()
@@ -482,6 +667,11 @@ function P.UpdatePreview(dt)
     -- Tab 切换碰撞箱可视化
     if input:GetKeyPress(KEY_TAB) then
         levelEditor_.previewShowColliders = not levelEditor_.previewShowColliders
+    end
+
+    -- H 切换坐标显示
+    if input:GetKeyPress(KEY_H) then
+        levelEditor_.previewShowCoords = not levelEditor_.previewShowCoords
     end
 
     -- 数字键1/2/3切换角色（受策略限制）
@@ -870,6 +1060,15 @@ function P.UpdatePreview(dt)
         levelEditor_.previewTriggeredSet[trigIdx] = true
         table.insert(popups, { text = "已触发", x = trigCX, y = trigCY + trigHH + 0.5, timer = 0, maxTime = 1.5 })
 
+        -- 检查是否存在 break_flow 续集：优先恢复续集执行而非重新执行整个策略
+        local continuation = levelEditor_.previewBreakContinuations and levelEditor_.previewBreakContinuations[trigIdx]
+        if continuation then
+            levelEditor_.previewBreakContinuations[trigIdx] = nil
+            print("[PREVIEW] fireTrigger: 恢复 break_flow 续集 (trigIdx=" .. trigIdx .. ")")
+            P._executeActionSublist(continuation.actions, continuation.startIdx, continuation.context)
+            return
+        end
+
         -- 执行触发器策略 + 关联执行器
         local stratCtx = { playerX = pCenterX, playerY = pCenterY, _trigObjIdx = trigIdx }
         local trigStratText = P._executeStrategy(obj, nil, stratCtx)
@@ -884,8 +1083,8 @@ function P.UpdatePreview(dt)
                     local exEf = exObj.executorEffect or "none"
                     local exCX = exObj.x + exObj.w / 2
                     local exCY = worldH - exObj.y - exObj.h / 2
-                    -- 执行器策略
-                    local exStratText = P._executeStrategy(obj, exObj, stratCtx)
+                    -- 仅执行执行器自身的策略（不重复执行触发器策略）
+                    local exStratText = P._executeExecutorOnly(exObj, stratCtx)
                     if exStratText then
                         table.insert(popups, { text = exStratText, x = exCX, y = exCY + exObj.h / 2 + 1.2, timer = 0, maxTime = 2.5 })
                     end
@@ -905,9 +1104,17 @@ function P.UpdatePreview(dt)
         if obj.type == "trigger" then
             local tm = obj.triggerMethod or "none"
             if tm ~= "none" then
-                -- 触发器世界坐标中心（Box2D Y-up）
-                local trigCX = obj.x + obj.w / 2
-                local trigCY = worldH - obj.y - obj.h / 2
+                -- 触发器世界坐标中心（优先从 previewNode 获取实时位置，move_obj 会修改节点位置）
+                local trigCX, trigCY
+                local pNode = levelEditor_.previewNodes and levelEditor_.previewNodes[i]
+                if pNode then
+                    local pos = pNode:GetPosition2D()
+                    trigCX = pos.x
+                    trigCY = pos.y
+                else
+                    trigCX = obj.x + obj.w / 2
+                    trigCY = worldH - obj.y - obj.h / 2
+                end
                 local trigHW = obj.w / 2
                 local trigHH = obj.h / 2
 
@@ -916,7 +1123,18 @@ function P.UpdatePreview(dt)
                 local overlapY = (math.abs(pCenterY - trigCY) < (pHalfH + trigHH))
                 local isOverlapping = overlapX and overlapY
 
-                if isOverlapping then
+                -- break_flow 重入机制：玩家离开触发器区域后清除重入标记（仅约束被动触发 touch/other）
+                local reenterSet = levelEditor_.previewBreakReenterSet
+                if not isOverlapping and reenterSet and reenterSet[i] then
+                    reenterSet[i] = nil
+                end
+
+                -- 主动触发（interact/attack）不受重入限制，玩家按键即表示"再次触发"
+                local needReenter = reenterSet and reenterSet[i]
+                local isPassive = (tm == "touch" or tm == "other")
+
+
+                if isOverlapping and not (needReenter and isPassive) then
                     if tm == "touch" then
                         if not levelEditor_.previewTriggeredSet[i] then
                             fireTrigger(i, obj, trigCX, trigCY, trigHH)
@@ -924,10 +1142,13 @@ function P.UpdatePreview(dt)
                     elseif tm == "interact" then
                         levelEditor_.previewInteractIdx = i
                         if input:GetKeyPress(KEY_F) and not levelEditor_.previewTriggeredSet[i] then
+                            -- 主动触发时清除重入标记
+                            if reenterSet then reenterSet[i] = nil end
                             fireTrigger(i, obj, trigCX, trigCY, trigHH)
                         end
                     elseif tm == "attack" then
                         if S.isAttacking and not levelEditor_.previewTriggeredSet[i] then
+                            if reenterSet then reenterSet[i] = nil end
                             fireTrigger(i, obj, trigCX, trigCY, trigHH)
                         end
                     elseif tm == "other" then
@@ -945,6 +1166,16 @@ function P.UpdatePreview(dt)
     local camPos = cameraNode.position
     local targetX = pPos.x
     local targetY = pPos.y
+
+    -- 镜头缩放/平移更新（可能覆盖跟随目标）
+    local camera = cameraNode:GetComponent("Camera")
+    if camera then
+        local zoomOverrideX, zoomOverrideY = P._updateCameraZoom(dt, cameraNode, camera, targetX, targetY)
+        if zoomOverrideX then
+            targetX, targetY = zoomOverrideX, zoomOverrideY
+        end
+    end
+
     -- 平滑跟随
     local lerpSpeed = 5.0
     local newX = camPos.x + (targetX - camPos.x) * math.min(1.0, lerpSpeed * dt)
@@ -953,7 +1184,6 @@ function P.UpdatePreview(dt)
     -- 镜头范围框边界约束：相机边缘不超出范围框
     if levelEditor_.cameraBoundsEnabled and levelEditor_.cameraBounds then
         local cb = levelEditor_.cameraBounds
-        local camera = cameraNode:GetComponent("Camera")
         if camera then
             local halfH = camera.orthoSize * 0.5
             local aspect = graphics:GetWidth() / graphics:GetHeight()
@@ -977,7 +1207,9 @@ function P.UpdatePreview(dt)
         end
     end
 
-    cameraNode.position = Vector3(newX, newY, -10)
+    -- 镜头抖动偏移
+    local shakeOX, shakeOY = P._updateCameraFx(dt)
+    cameraNode.position = Vector3(newX + shakeOX, newY + shakeOY, -10)
 
     -- 玩家掉出世界边界重置位置
     if pPos.y < -5 then
@@ -1259,12 +1491,26 @@ function P.DrawPreview(vg, physW, physH)
 
     local effectTime = time.elapsedTime
     local destroyedSetDraw = levelEditor_.previewDestroyedSet or {}
+    local previewNodesForDraw = levelEditor_.previewNodes or {}
     for i_obj, obj in ipairs(objects) do
         if destroyedSetDraw[i_obj] then goto continue_draw end
         -- 应用动态效果
         local edx, edy, eScale, eAngle, eAlpha, renderCtx = EffectRegistry.Apply(obj.effects, effectTime)
-        local bx = (obj.x + edx) + obj.w / 2
-        local by = levelEditor_.worldH - (obj.y + edy) - obj.h / 2
+        -- move_obj 透明度覆盖
+        if levelEditor_.previewObjOpacity and levelEditor_.previewObjOpacity[i_obj] then
+            eAlpha = eAlpha * levelEditor_.previewObjOpacity[i_obj]
+        end
+        -- 优先从 previewNodes 获取实时位置（move_obj 会修改节点位置）
+        local bx, by
+        local pNode = previewNodesForDraw[i_obj]
+        if pNode then
+            local pos = pNode:GetPosition2D()
+            bx = pos.x + edx
+            by = pos.y + edy
+        else
+            bx = (obj.x + edx) + obj.w / 2
+            by = levelEditor_.worldH - (obj.y + edy) - obj.h / 2
+        end
         local sx, sy = worldToScreen(bx, by)
         local pw = obj.w * ppu * eScale
         local ph = obj.h * ppu * eScale
@@ -1288,8 +1534,12 @@ function P.DrawPreview(vg, physW, physH)
         local prevObjCol = obj.color or {255, 255, 255, 255}
         local texLayers = obj.texLayers
 
-        -- 如果有旋转（静态rotation + 动态效果eAngle），保存变换状态并绕物件中心旋转
+        -- 如果有旋转（静态rotation + 动态效果eAngle + 运行时旋转），保存变换状态并绕物件中心旋转
         local objRotRad = (obj.rotation or 0) * math.pi / 180
+        -- move_obj 运行时旋转：previewNode.rotation2D 是 Box2D 角度（= -editorDeg），需取反还原为编辑器角度
+        if pNode then
+            objRotRad = -pNode.rotation2D * math.pi / 180
+        end
         local totalAngle = eAngle + objRotRad
         local hasRotation = (totalAngle ~= 0)
         if hasRotation then
@@ -1297,6 +1547,15 @@ function P.DrawPreview(vg, physW, physH)
             nvgTranslate(vg, sx, sy)
             nvgRotate(vg, totalAngle)
             nvgTranslate(vg, -sx, -sy)
+        end
+
+        -- 朝向翻转（move_obj flipByMoveDir 功能）
+        local objFlipH = levelEditor_.previewObjFlipH and levelEditor_.previewObjFlipH[i_obj]
+        if objFlipH then
+            nvgSave(vg)
+            nvgTranslate(vg, sx, 0)
+            nvgScale(vg, -1, 1)
+            nvgTranslate(vg, -sx, 0)
         end
 
         -- 有贴图时不绘制占位色块（透明），无贴图时照常绘制
@@ -1390,6 +1649,9 @@ function P.DrawPreview(vg, physW, physH)
             end
         end
 
+        if objFlipH then
+            nvgRestore(vg)
+        end
         if hasRotation then
             nvgRestore(vg)
         end
@@ -1579,16 +1841,16 @@ function P.DrawPreview(vg, physW, physH)
         local boxCenterY = py - boxCenterOff * ppu
         nvgBeginPath(vg)
         nvgRect(vg, px - boxW/2, boxCenterY - boxH/2, boxW, boxH)
-        nvgStrokeColor(vg, nvgRGBA(0, 255, 100, 180))
-        nvgStrokeWidth(vg, 2)
+        nvgStrokeColor(vg, nvgRGBA(0, 255, 100, 220))
+        nvgStrokeWidth(vg, 3)
         nvgStroke(vg)
 
         -- 脚底传感器（圆形 radius=0.28, center=(0, -0.36)）
         local footY = py + 0.36 * ppu
         nvgBeginPath(vg)
         nvgCircle(vg, px, footY, 0.28 * ppu)
-        nvgStrokeColor(vg, nvgRGBA(255, 200, 0, 160))
-        nvgStrokeWidth(vg, 1.5)
+        nvgStrokeColor(vg, nvgRGBA(255, 200, 0, 200))
+        nvgStrokeWidth(vg, 2.5)
         nvgStroke(vg)
 
         -- 物件碰撞箱（遍历所有有物理碰撞的物件）
@@ -1601,50 +1863,14 @@ function P.DrawPreview(vg, physW, physH)
                 local oph = obj.h * ppu
                 nvgBeginPath(vg)
                 nvgRect(vg, osx - opw/2, osy - oph/2, opw, oph)
-                nvgStrokeColor(vg, nvgRGBA(0, 200, 80, 120))
-                nvgStrokeWidth(vg, 1.5)
+                nvgStrokeColor(vg, nvgRGBA(0, 200, 80, 180))
+                nvgStrokeWidth(vg, 3)
                 nvgStroke(vg)
             end
         end
     end
 
-    -- 游戏可视范围红框（21.33m × 12m，跟随相机实际位置）
-    local gameViewW = C.SCREEN_WIDTH / C.PIXELS_PER_UNIT  -- ≈21.33m
-    local gameViewH = C.SCREEN_HEIGHT / C.PIXELS_PER_UNIT  -- =12m
-    -- 红框使用实际相机位置（已被cameraBounds约束），始终保持在黄色范围框内
-    local viewCenterX = camX
-    local viewCenterY = camY
-    local vLeft, vTop = worldToScreen(viewCenterX - gameViewW/2, viewCenterY + gameViewH/2)
-    local vRight, vBottom = worldToScreen(viewCenterX + gameViewW/2, viewCenterY - gameViewH/2)
-    local vw = vRight - vLeft
-    local vh = vBottom - vTop
-    nvgBeginPath(vg)
-    nvgRect(vg, vLeft, vTop, vw, vh)
-    nvgStrokeColor(vg, nvgRGBA(255, 50, 50, 200))
-    nvgStrokeWidth(vg, 2.5)
-    nvgStroke(vg)
-    -- 红框角标
-    local cornerLen = 12
-    nvgBeginPath(vg)
-    -- 左上角
-    nvgMoveTo(vg, vLeft, vTop + cornerLen)
-    nvgLineTo(vg, vLeft, vTop)
-    nvgLineTo(vg, vLeft + cornerLen, vTop)
-    -- 右上角
-    nvgMoveTo(vg, vRight - cornerLen, vTop)
-    nvgLineTo(vg, vRight, vTop)
-    nvgLineTo(vg, vRight, vTop + cornerLen)
-    -- 右下角
-    nvgMoveTo(vg, vRight, vBottom - cornerLen)
-    nvgLineTo(vg, vRight, vBottom)
-    nvgLineTo(vg, vRight - cornerLen, vBottom)
-    -- 左下角
-    nvgMoveTo(vg, vLeft + cornerLen, vBottom)
-    nvgLineTo(vg, vLeft, vBottom)
-    nvgLineTo(vg, vLeft, vBottom - cornerLen)
-    nvgStrokeColor(vg, nvgRGBA(255, 80, 80, 255))
-    nvgStrokeWidth(vg, 3.5)
-    nvgStroke(vg)
+
 
     -- ====== 触发器/执行器浮动文字提示 ======
     local popups = levelEditor_.previewTriggerPopups
@@ -1718,11 +1944,18 @@ function P.DrawPreview(vg, physW, physH)
         nvgText(vg, 10, 30, "地面")
     end
 
-    -- 红框尺寸提示
-    nvgFontSize(vg, 11)
-    nvgFillColor(vg, nvgRGBA(255, 100, 100, 180))
-    nvgTextAlign(vg, NVG_ALIGN_CENTER + NVG_ALIGN_BOTTOM)
-    nvgText(vg, (vLeft + vRight) / 2, vTop - 4, string.format("游戏视野 %.1fm×%.0fm", gameViewW, gameViewH))
+    -- 左上角：角色当前坐标（H键切换）
+    if levelEditor_.previewShowCoords ~= false then
+        local coordY = levelEditor_.previewOnGround and 46 or 30
+        nvgFontSize(vg, 18)
+        nvgFillColor(vg, nvgRGBA(0, 0, 0, 230))
+        nvgTextAlign(vg, NVG_ALIGN_LEFT + NVG_ALIGN_TOP)
+        local cpx = pPos.x
+        local cpy = pPos.y
+        nvgText(vg, 10, coordY, string.format("坐标: (%.2f, %.2f)", cpx, cpy))
+    end
+
+
 
     -- 右下角：滞空滑翔状态 + 碎片数
     do
@@ -1761,11 +1994,665 @@ function P.DrawPreview(vg, physW, physH)
         nvgTextAlign(vg, NVG_ALIGN_RIGHT + NVG_ALIGN_BOTTOM)
         nvgText(vg, rx - 8, ry - th - 2, "[X] 切换")
     end
+
+    -- 绘制粒子效果
+    local particles = levelEditor_.previewParticles or {}
+    if #particles > 0 then
+        for _, p in ipairs(particles) do
+            local sx, sy = worldToScreen(p.x, p.y)
+            local lifeRatio = p.life / (p.maxLife or 1.0)
+            local alpha = math.max(0, math.min(255, math.floor(lifeRatio * 255)))
+            local radius = (p.size or 0.1) * ppu
+            nvgBeginPath(vg)
+            nvgCircle(vg, sx, sy, math.max(2, radius))
+            nvgFillColor(vg, nvgRGBA(255, 200, 60, alpha))
+            nvgFill(vg)
+        end
+    end
+
+    -- 屏幕闪光叠加层
+    local flash = levelEditor_.previewScreenFlash
+    if flash then
+        flash.elapsed = (flash.elapsed or 0) + (time.timeStep or 0.016)
+        local progress = flash.elapsed / flash.duration
+        if progress >= 1.0 then
+            levelEditor_.previewScreenFlash = nil
+        else
+            local flashAlpha = math.floor((1.0 - progress) * 180)
+            local fc = FLASH_COLOR_MAP[flash.color] or FLASH_COLOR_MAP.white
+            nvgBeginPath(vg)
+            nvgRect(vg, 0, 0, physW, physH)
+            nvgFillColor(vg, nvgRGBA(fc[1], fc[2], fc[3], flashAlpha))
+            nvgFill(vg)
+        end
+    end
+end
+
+-- ============================================================================
+-- 动作节点运行时更新
+-- ============================================================================
+
+--- 每帧更新移动对象任务
+--- 执行动作列表（从 startIdx 开始），遇到 delay 节点时打包剩余动作到延迟队列
+--- @param actions table 完整动作列表
+--- @param startIdx number 起始索引（1-based）
+--- @param context table|nil 运行时上下文
+function P._executeActionSublist(actions, startIdx, context)
+    local items = levelEditor_.previewItems or {}
+    local trigObjIdx = context and context._trigObjIdx
+
+    for i = startIdx, #actions do
+        local act = actions[i]
+        local node = act.node or {}
+
+        -- 遇到 delay 节点：将后续动作压入延迟队列，中断当前循环
+        if act.nodeType == "delay" then
+            local delaySec = tonumber(node.delaySeconds) or 1.0
+            if i < #actions then
+                table.insert(levelEditor_.previewDelayedQueues, {
+                    actions = actions,
+                    startIdx = i + 1,
+                    timer = delaySec,
+                    context = context,
+                })
+            end
+            break
+        end
+
+        -- 遇到 break_flow 节点：将后续动作存入续集表，重置触发器，中断当前循环
+        if act.nodeType == "break_flow" then
+            if trigObjIdx and i < #actions then
+                levelEditor_.previewBreakContinuations[trigObjIdx] = {
+                    actions = actions,
+                    startIdx = i + 1,
+                    context = context,
+                }
+                -- 重新激活触发器，使其可以再次被触发以恢复执行
+                if levelEditor_.previewTriggeredSet then
+                    levelEditor_.previewTriggeredSet[trigObjIdx] = nil
+                end
+                -- 标记需要玩家先离开触发器区域再重新进入才可触发（避免 touch 模式下立刻重触发）
+                levelEditor_.previewBreakReenterSet[trigObjIdx] = true
+                print("[PREVIEW] break_flow: 中断执行, trigIdx=" .. trigObjIdx .. ", continuation startIdx=" .. (i+1))
+            end
+            break
+        end
+
+        -- 正常执行动作副作用
+        if act.nodeType == "modify_item" then
+            local name = node.itemName or "light_fragment"
+            local op = node.itemOp or "add"
+            local amount = node.itemAmount or 1
+            if type(amount) ~= "number" then amount = tonumber(amount) or 1 end
+            local cur = items[name] or 0
+            if op == "add" then
+                items[name] = cur + amount
+            elseif op == "remove" then
+                items[name] = math.max(0, cur - amount)
+            elseif op == "set" then
+                items[name] = amount
+            end
+            if name == "light_fragment" then
+                items[name] = math.min(3, math.max(0, items[name]))
+            end
+        elseif act.nodeType == "set_ability" then
+            local ability = node.abilityName or "hang_glide"
+            local enabled = node.abilityEnabled
+            if enabled == nil then enabled = true end
+            if ability == "hang_glide" then
+                P.hangGlideEnabled = enabled
+            end
+        elseif act.nodeType == "destroy_self" then
+            if trigObjIdx then
+                levelEditor_.previewDestroyedSet[trigObjIdx] = true
+            end
+        elseif act.nodeType == "move_obj" then
+            local targetIdx = tonumber(node.targetObjIdx) or 0
+            -- targetObjIdx==0 表示"自身"（触发器物件）
+            if targetIdx == 0 and trigObjIdx and trigObjIdx >= 1 then
+                targetIdx = trigObjIdx
+            end
+            if targetIdx >= 1 then
+                local targetNode = levelEditor_.previewNodes[targetIdx]
+                if targetNode then
+                    local pos = targetNode:GetPosition2D()
+                    local pathPoints = node.pathPoints or {}
+                    if #pathPoints == 0 then
+                        pathPoints = { { x = 2, y = 0 } }
+                    end
+                    local easeName = node.moveEase or "easeOut"
+                    -- 透明度动画：记录起始透明度
+                    local opacityTarget = node.opacityTarget
+                    local opacityDuration = node.opacityDuration or 0.5
+                    local hasOpacity = (opacityTarget ~= nil and opacityTarget ~= 1.0) or (opacityDuration > 0 and opacityTarget ~= nil)
+                    local currentOpacity = 1.0
+                    if hasOpacity then
+                        if not levelEditor_.previewObjOpacity then levelEditor_.previewObjOpacity = {} end
+                        currentOpacity = levelEditor_.previewObjOpacity[targetIdx] or 1.0
+                    end
+
+                    table.insert(levelEditor_.previewMotions, {
+                        node = targetNode,
+                        objIdx = targetIdx,
+                        pathEvaluator = createPathEvaluator(
+                            node.pathType or "linear",
+                            pathPoints,
+                            pos.x, pos.y
+                        ),
+                        easeFn = EASE_FNS[easeName] or EASE_FNS.easeOut,
+                        duration = node.moveDuration or 1.0,
+                        roundTrip = node.moveRoundTrip or false,
+                        loop = node.moveLoop or false,
+                        repeatTotal = node.moveRepeatCount or 1,
+                        rotationDeg = node.rotationDeg or 0,
+                        flipByMoveDir = node.flipByMoveDir or false,
+                        -- 透明度动画
+                        opacityFrom = currentOpacity,
+                        opacityTarget = opacityTarget or 1.0,
+                        opacityDuration = opacityDuration,
+                        opacityElapsed = 0,
+                        hasOpacity = hasOpacity,
+                        elapsed = 0,
+                        phase = "forward",
+                        repeatDone = 0,
+                        finished = false,
+                        originX = pos.x,
+                        originY = pos.y,
+                        prevX = pos.x,
+                        originRotation = targetNode.rotation2D or 0,
+                    })
+                end
+            end
+        elseif act.nodeType == "play_fx" then
+            P._executeFx(node.fxType or "sound", node, context)
+        elseif act.nodeType == "camera_zoom" then
+            local camera = levelEditor_.previewCameraNode and levelEditor_.previewCameraNode:GetComponent("Camera")
+            if camera then
+                local baseSize = levelEditor_.previewBaseOrthoSize or camera.orthoSize
+                local toSize = baseSize / (node.zoomScale or 1.0)
+                local easeName = node.zoomEase or "easeOut"
+                local camPos = levelEditor_.previewCameraNode.position
+                levelEditor_.previewCameraZoom = {
+                    phase = "zoom_in",  -- 状态机阶段: zoom_in → holding → restore → done
+                    fromOrthoSize = camera.orthoSize,
+                    toOrthoSize = toSize,
+                    duration = node.zoomDuration or 0.5,
+                    easeFn = EASE_FNS[easeName] or EASE_FNS.easeOut,
+                    elapsed = 0,
+                    usePan = node.zoomUsePan or false,
+                    fromCenterX = camPos.x,
+                    fromCenterY = camPos.y,
+                    toCenterX = node.zoomCenterX or 15.0,
+                    toCenterY = node.zoomCenterY or 8.75,
+                    finished = false,
+                    -- 自动恢复相关
+                    autoRestore = node.zoomAutoRestore or false,
+                    holdDuration = node.zoomHoldDuration or 3.0,
+                    holdElapsed = 0,
+                    restoreDuration = node.zoomRestoreDuration or 0.5,
+                    restoreEaseFn = EASE_FNS[node.zoomRestoreEase or "easeOut"] or EASE_FNS.easeOut,
+                    restoreElapsed = 0,
+                    -- 恢复目标（zoom_in 完成后填充）
+                    restoreFromOrthoSize = nil,
+                    restoreToOrthoSize = camera.orthoSize,
+                    restoreFromCenterX = nil,
+                    restoreFromCenterY = nil,
+                    restoreToCenterX = camPos.x,
+                    restoreToCenterY = camPos.y,
+                }
+            end
+        elseif act.nodeType == "teleport_player" then
+            local tx = tonumber(node.targetX) or 15.0
+            local ty = tonumber(node.targetY) or 8.0
+            -- targetX/Y 直接使用游戏坐标（Y-up），与 camera_zoom 一致
+            local playerNode = levelEditor_.previewPlayerNode
+            if playerNode then
+                playerNode:SetPosition2D(tx, ty)
+                local body = playerNode:GetComponent("RigidBody2D")
+                if body then
+                    body:SetLinearVelocity(Vector2(0, 0))
+                    body:SetAwake(true)
+                end
+                print("[PREVIEW] teleport_player: 传送到 (" .. tx .. ", " .. ty .. ")")
+            end
+
+        elseif act.nodeType == "reset_trigger" then
+            local targetIdx = node.resetTargetIdx or 0
+            -- targetIdx==0 表示"自身"（触发此策略的触发器）
+            if targetIdx == 0 and trigObjIdx and trigObjIdx >= 1 then
+                targetIdx = trigObjIdx
+            end
+            if targetIdx > 0 then
+                local objects = levelEditor_.objects[levelEditor_.chapterIdx .. "_" .. levelEditor_.levelIdx] or {}
+                local targetObj = objects[targetIdx]
+                if targetObj and targetObj.type == "trigger" then
+                    -- 重置已触发标志（正确的表是 previewTriggeredSet）
+                    if levelEditor_.previewTriggeredSet then
+                        levelEditor_.previewTriggeredSet[targetIdx] = nil
+                    end
+                    -- 同时清除 break_flow 续集和重入标记（重置意味着下次触发应从头执行）
+                    if levelEditor_.previewBreakContinuations then
+                        levelEditor_.previewBreakContinuations[targetIdx] = nil
+                    end
+                    if levelEditor_.previewBreakReenterSet then
+                        levelEditor_.previewBreakReenterSet[targetIdx] = nil
+                    end
+                    -- 可选修改触发方式
+                    local method = node.resetMethod or "keep"
+                    if method ~= "keep" then
+                        targetObj.triggerMethod = method
+                    end
+                    print("[PREVIEW] reset_trigger: 已重置触发器 #" .. targetIdx .. " (方式=" .. method .. ")")
+                end
+            end
+        end
+    end
+    levelEditor_.previewItems = items
+end
+
+--- 每帧更新延迟动作队列（倒计时 → 到期时执行）
+function P._updateDelayedQueues(dt)
+    local queues = levelEditor_.previewDelayedQueues
+    if not queues or #queues == 0 then return end
+
+    -- 从末尾遍历以便安全移除
+    for i = #queues, 1, -1 do
+        local q = queues[i]
+        q.timer = q.timer - dt
+        if q.timer <= 0 then
+            table.remove(queues, i)
+            -- 执行到期的动作（可能递归产生新的延迟条目）
+            P._executeActionSublist(q.actions, q.startIdx, q.context)
+        end
+    end
+end
+
+function P._updateMotions(dt)
+    local motions = levelEditor_.previewMotions
+    if not motions then return end
+    for i = #motions, 1, -1 do
+        local m = motions[i]
+        if m.finished then
+            -- 运动结束，恢复刚体类型
+            if m._wasStatic and m.node then
+                local body = m.node:GetComponent("RigidBody2D")
+                if body then body.bodyType = BT_STATIC end
+            end
+            table.remove(motions, i)
+            goto continue_motion
+        end
+
+        m.elapsed = m.elapsed + dt
+        local t = math.min(1.0, m.elapsed / m.duration)
+        local easedT = m.easeFn(t)
+
+        -- 方向处理
+        local pathT = (m.phase == "backward") and (1.0 - easedT) or easedT
+        local wx, wy = m.pathEvaluator(pathT)
+
+        -- 设置节点位置（kinematic body 才能通过代码移动）
+        if m.node then
+            local body = m.node:GetComponent("RigidBody2D")
+            if body and body.bodyType == BT_STATIC then
+                body.bodyType = BT_KINEMATIC  -- 临时切为运动学体
+                m._wasStatic = true
+            end
+            m.node:SetPosition2D(wx, wy)
+            if body then body:SetAwake(true) end
+        end
+
+        -- 朝向跟随移动方向：X正向不翻转，X负向翻转贴图
+        if m.flipByMoveDir and m.objIdx then
+            local dx = wx - m.prevX
+            if math.abs(dx) > 0.001 then
+                if not levelEditor_.previewObjFlipH then levelEditor_.previewObjFlipH = {} end
+                levelEditor_.previewObjFlipH[m.objIdx] = (dx < 0)
+            end
+            m.prevX = wx
+        end
+
+        -- 旋转叠加（基于单程进度线性增长）
+        if m.rotationDeg ~= 0 and m.node then
+            local rotProgress = easedT
+            m.node.rotation2D = m.originRotation - (m.rotationDeg * rotProgress)
+        end
+
+        -- 透明度动画（独立计时，不受路径/旋转阶段影响）
+        if m.hasOpacity and m.objIdx then
+            m.opacityElapsed = m.opacityElapsed + dt
+            local ot = 1.0
+            if m.opacityDuration > 0 then
+                ot = math.min(1.0, m.opacityElapsed / m.opacityDuration)
+            end
+            local newAlpha = m.opacityFrom + (m.opacityTarget - m.opacityFrom) * ot
+            if not levelEditor_.previewObjOpacity then levelEditor_.previewObjOpacity = {} end
+            levelEditor_.previewObjOpacity[m.objIdx] = newAlpha
+        end
+
+        -- 阶段切换
+        if t >= 1.0 then
+            if m.roundTrip and m.phase == "forward" then
+                m.phase = "backward"
+                m.elapsed = 0
+            else
+                m.repeatDone = m.repeatDone + 1
+                if m.loop or m.repeatDone < m.repeatTotal then
+                    m.phase = "forward"
+                    m.elapsed = 0
+                else
+                    m.finished = true
+                end
+            end
+        end
+        ::continue_motion::
+    end
+end
+
+--- 每帧更新镜头缩放/平移
+--- @param dt number
+--- @param cameraNode userdata
+--- @param camera userdata
+--- @param normalX number 正常跟随目标X
+--- @param normalY number 正常跟随目标Y
+--- @return number, number 最终相机目标坐标
+function P._updateCameraZoom(dt, cameraNode, camera, normalX, normalY)
+    local zoom = levelEditor_.previewCameraZoom
+    if not zoom then return normalX, normalY end
+
+    local phase = zoom.phase or "zoom_in"
+    local targetX, targetY = normalX, normalY
+
+    if phase == "zoom_in" then
+        -- 阶段1: 缩放/平移到目标
+        zoom.elapsed = zoom.elapsed + dt
+        local t = math.min(1.0, zoom.elapsed / math.max(0.001, zoom.duration))
+        local et = zoom.easeFn(t)
+
+        camera.orthoSize = zoom.fromOrthoSize + (zoom.toOrthoSize - zoom.fromOrthoSize) * et
+
+        if zoom.usePan then
+            targetX = zoom.fromCenterX + (zoom.toCenterX - zoom.fromCenterX) * et
+            targetY = zoom.fromCenterY + (zoom.toCenterY - zoom.fromCenterY) * et
+        end
+
+        if t >= 1.0 then
+            if zoom.autoRestore then
+                -- 进入 holding 阶段
+                zoom.phase = "holding"
+                zoom.holdElapsed = 0
+                -- 记录恢复起点（当前到达的位置）
+                zoom.restoreFromOrthoSize = camera.orthoSize
+                if zoom.usePan then
+                    zoom.restoreFromCenterX = zoom.toCenterX
+                    zoom.restoreFromCenterY = zoom.toCenterY
+                end
+            else
+                zoom.phase = "done"
+                zoom.finished = true
+            end
+        end
+
+    elseif phase == "holding" then
+        -- 阶段2: 持续保持缩放状态
+        zoom.holdElapsed = zoom.holdElapsed + dt
+        camera.orthoSize = zoom.toOrthoSize
+        if zoom.usePan then
+            targetX = zoom.toCenterX
+            targetY = zoom.toCenterY
+        end
+
+        if zoom.holdElapsed >= zoom.holdDuration then
+            -- 进入 restore 阶段
+            zoom.phase = "restore"
+            zoom.restoreElapsed = 0
+        end
+
+    elseif phase == "restore" then
+        -- 阶段3: 恢复到原始缩放/位置
+        zoom.restoreElapsed = zoom.restoreElapsed + dt
+        local t = math.min(1.0, zoom.restoreElapsed / math.max(0.001, zoom.restoreDuration))
+        local et = zoom.restoreEaseFn(t)
+
+        camera.orthoSize = zoom.restoreFromOrthoSize + (zoom.restoreToOrthoSize - zoom.restoreFromOrthoSize) * et
+
+        if zoom.usePan then
+            targetX = (zoom.restoreFromCenterX or zoom.toCenterX) + (zoom.restoreToCenterX - (zoom.restoreFromCenterX or zoom.toCenterX)) * et
+            targetY = (zoom.restoreFromCenterY or zoom.toCenterY) + (zoom.restoreToCenterY - (zoom.restoreFromCenterY or zoom.toCenterY)) * et
+        end
+
+        if t >= 1.0 then
+            zoom.phase = "done"
+            zoom.finished = true
+            -- 恢复完毕，清除 zoom 对象让相机回归正常跟随
+            levelEditor_.previewCameraZoom = nil
+        end
+
+    else -- "done"
+        -- 无自动恢复时保持最终状态
+        camera.orthoSize = zoom.toOrthoSize
+        if zoom.usePan then
+            targetX = zoom.toCenterX
+            targetY = zoom.toCenterY
+        end
+    end
+
+    return targetX, targetY
+end
+
+--- 每帧更新相机效果（抖动等），返回偏移量
+--- @param dt number
+--- @return number offsetX, number offsetY
+function P._updateCameraFx(dt)
+    local fxList = levelEditor_.previewCameraFx
+    if not fxList then return 0, 0 end
+    local offsetX, offsetY = 0, 0
+    for i = #fxList, 1, -1 do
+        local fx = fxList[i]
+        if fx.type == "shake" then
+            fx.elapsed = fx.elapsed + dt
+            if fx.elapsed >= fx.duration then
+                table.remove(fxList, i)
+            else
+                local amp = fx.intensity * (1.0 - fx.elapsed / fx.duration)
+                offsetX = offsetX + (math.random() * 2 - 1) * amp
+                offsetY = offsetY + (math.random() * 2 - 1) * amp
+            end
+        end
+    end
+    return offsetX, offsetY
+end
+
+--- 每帧更新粒子
+function P._updateParticles(dt)
+    local particles = levelEditor_.previewParticles
+    if not particles then return end
+    for i = #particles, 1, -1 do
+        local p = particles[i]
+        p.life = p.life - dt
+        if p.life <= 0 then
+            table.remove(particles, i)
+        else
+            p.x = p.x + p.vx * dt
+            p.y = p.y + p.vy * dt
+            -- 重力影响
+            p.vy = p.vy - 3.0 * dt
+        end
+    end
+end
+
+-- ============================================================================
+-- play_fx 效果分发系统
+-- ============================================================================
+
+--- 播放音效
+function P._fxSound(node, context)
+    local file = node.soundFile or ""
+    if file == "" then return end
+    local sound = cache:GetResource("Sound", file)
+    if not sound then
+        print("[play_fx] 音效资源未找到: " .. file)
+        return
+    end
+    sound.looped = false
+    local scene = levelEditor_.previewScene
+    if not scene then return end
+    local sourceNode = scene:CreateChild("SfxSource")
+    local source = sourceNode:CreateComponent("SoundSource")
+    source.soundType = "Effect"
+    source:Play(sound)
+    source.gain = node.soundVolume or 1.0
+    -- 播放完后自动清理（简单方案：延迟销毁节点）
+    -- 由于 Sound 播放是引擎管理的，这里标记延迟清理
+    if not levelEditor_.previewSfxNodes then levelEditor_.previewSfxNodes = {} end
+    table.insert(levelEditor_.previewSfxNodes, { node = sourceNode, timer = 10.0 })
+end
+
+--- 相机抖动
+function P._fxCameraShake(node, _)
+    local fxList = levelEditor_.previewCameraFx
+    if not fxList then return end
+    table.insert(fxList, {
+        type = "shake",
+        duration = node.shakeDuration or 0.3,
+        intensity = (node.shakeIntensity or 1.0) * 0.1,  -- 转换为米单位偏移
+        elapsed = 0.0,
+    })
+end
+
+--- 全屏闪光
+function P._fxScreenFlash(node, _)
+    levelEditor_.previewScreenFlash = {
+        color = node.flashColor or "white",
+        duration = node.flashDuration or 0.2,
+        elapsed = 0.0,
+    }
+end
+
+--- 浮动文字
+function P._fxFloatingText(node, context)
+    local popups = levelEditor_.previewTriggerPopups
+    if not popups then return end
+    local text = node.floatText or ""
+    if text == "" then return end
+    local px = context and context.playerX or (levelEditor_.worldW / 2)
+    local py = context and context.playerY or (levelEditor_.worldH / 2)
+    table.insert(popups, {
+        text = text,
+        x = px,
+        y = py + 2.0,
+        timer = 0,
+        maxTime = 2.5,
+        color = node.floatColor or "white",
+        fontSize = node.floatSize or 24,
+    })
+end
+
+--- 粒子效果
+function P._fxParticle(node, context)
+    local particles = levelEditor_.previewParticles
+    if not particles then return end
+    local px = context and context.playerX or (levelEditor_.worldW / 2)
+    local py = context and context.playerY or (levelEditor_.worldH / 2)
+    local dirKey = node.particleDir or "up"
+    local dirVec = PARTICLE_DIR_MAP[dirKey] or PARTICLE_DIR_MAP.up
+    local count = node.particleCount or 10
+    local speed = node.particleSpeed or 3.0
+    for _ = 1, count do
+        local vx, vy
+        if dirKey == "radial" then
+            local angle = math.random() * math.pi * 2
+            vx = math.cos(angle) * speed * (0.5 + math.random() * 0.5)
+            vy = math.sin(angle) * speed * (0.5 + math.random() * 0.5)
+        else
+            vx = dirVec.x * speed * (0.7 + math.random() * 0.6) + (math.random() - 0.5) * speed * 0.3
+            vy = dirVec.y * speed * (0.7 + math.random() * 0.6) + (math.random() - 0.5) * speed * 0.3
+        end
+        table.insert(particles, {
+            x = px + (math.random() - 0.5) * 0.5,
+            y = py + (math.random() - 0.5) * 0.5,
+            vx = vx,
+            vy = vy,
+            life = 0.8 + math.random() * 0.6,
+            maxLife = 0.8 + math.random() * 0.6,
+            size = 0.1 + math.random() * 0.1,
+        })
+    end
+end
+
+--- 慢动作
+function P._fxSlowMotion(node, _)
+    levelEditor_.previewSlowMotion = {
+        factor = node.slowFactor or 0.3,
+        duration = node.slowDuration or 1.0,
+        elapsed = 0.0,
+    }
+end
+
+--- 效果分发表（可扩展）
+P._fxHandlers = {
+    sound         = P._fxSound,
+    camera_shake  = P._fxCameraShake,
+    screen_flash  = P._fxScreenFlash,
+    floating_text = P._fxFloatingText,
+    particle      = P._fxParticle,
+    slow_motion   = P._fxSlowMotion,
+}
+
+--- 执行 play_fx 节点
+function P._executeFx(fxType, node, context)
+    local handler = P._fxHandlers[fxType]
+    if handler then
+        handler(node, context)
+    else
+        print("[play_fx] 未实现的效果类型: " .. tostring(fxType))
+    end
 end
 
 -- ============================================================================
 -- 策略树执行辅助 (预览模式)
 -- ============================================================================
+
+--- 仅执行执行器自身的策略树（不重复执行触发器策略）
+--- @param executorObj table 执行器对象
+--- @param context table 运行时上下文
+--- @return string|nil popupText
+function P._executeExecutorOnly(executorObj, context)
+    if not executorObj or not executorObj.executorStrategy or not executorObj.executorStrategy.rootId then
+        return nil
+    end
+    local SN = require("StrategyNode")
+    local items = levelEditor_.previewItems or {}
+    local tree = executorObj.executorStrategy
+    local params = {}
+    for _, p in ipairs(tree.params or {}) do
+        params[p.name] = p.value
+    end
+    if context then
+        for k, v in pairs(context) do params[k] = v end
+    end
+    params._items = items
+    local actions = SN.Execute(tree, params)
+
+    -- 执行实际运行时副作用（支持 delay 节点异步延迟）
+    P._executeActionSublist(actions, 1, context)
+
+    -- 生成文本摘要
+    if #actions > 0 then
+        local texts = {}
+        for _, act in ipairs(actions) do
+            local node = act.node or {}
+            local ntDef = SN.NODE_TYPES[act.nodeType]
+            local label = ntDef and ntDef.label or act.nodeType
+            if act.nodeType == "teleport_player" then
+                table.insert(texts, label .. "(" .. tostring(node.targetX or 15) .. "," .. tostring(node.targetY or 8) .. ")")
+            else
+                table.insert(texts, label)
+            end
+        end
+        return table.concat(texts, " | ")
+    end
+    return nil
+end
 
 --- 触发器触发时执行策略树，返回弹出文字列表
 --- @param trigObj table 触发器对象
@@ -1815,42 +2702,8 @@ function P._executeStrategy(trigObj, executorObj, context)
         end
     end
 
-    -- 2.5 执行实际运行时副作用
-    local trigObjIdx = context and context._trigObjIdx
-    for _, act in ipairs(results) do
-        local node = act.node or {}
-        if act.nodeType == "modify_item" then
-            local name = node.itemName or "light_fragment"
-            local op = node.itemOp or "add"
-            local amount = node.itemAmount or 1
-            -- 从端口输入获取数量（如果连接了数据节点）
-            if type(amount) ~= "number" then amount = tonumber(amount) or 1 end
-            local cur = items[name] or 0
-            if op == "add" then
-                items[name] = cur + amount
-            elseif op == "remove" then
-                items[name] = math.max(0, cur - amount)
-            elseif op == "set" then
-                items[name] = amount
-            end
-            -- 碎片最大3个
-            if name == "light_fragment" then
-                items[name] = math.min(3, math.max(0, items[name]))
-            end
-        elseif act.nodeType == "set_ability" then
-            local ability = node.abilityName or "hang_glide"
-            local enabled = node.abilityEnabled
-            if enabled == nil then enabled = true end
-            if ability == "hang_glide" then
-                P.hangGlideEnabled = enabled
-            end
-        elseif act.nodeType == "destroy_self" then
-            if trigObjIdx then
-                levelEditor_.previewDestroyedSet[trigObjIdx] = true
-            end
-        end
-    end
-    levelEditor_.previewItems = items
+    -- 2.5 执行实际运行时副作用（支持 delay 节点异步延迟）
+    P._executeActionSublist(results, 1, context)
 
     -- 3. 生成文本摘要
     if #results > 0 then
@@ -1890,6 +2743,12 @@ function P._executeStrategy(trigObj, executorObj, context)
                 table.insert(texts, label .. "(" .. (node.abilityEnabled and "启用" or "禁用") .. " " .. abilLabel .. ")")
             elseif act.nodeType == "destroy_self" then
                 table.insert(texts, label)
+            elseif act.nodeType == "teleport_player" then
+                table.insert(texts, label .. "(" .. tostring(node.targetX or 15) .. "," .. tostring(node.targetY or 8) .. ")")
+            elseif act.nodeType == "reset_trigger" then
+                local mLabel = node.resetMethod or "keep"
+                for _, m in ipairs(SN.TRIGGER_METHODS) do if m.id == node.resetMethod then mLabel = m.label; break end end
+                table.insert(texts, label .. "(#" .. tostring(node.resetTargetIdx or 0) .. " " .. mLabel .. ")")
             else
                 table.insert(texts, label)
             end
