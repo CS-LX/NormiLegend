@@ -10,6 +10,8 @@ local Combat = require("Combat")
 local EditorState = require("editor.EditorState")
 require("effects.builtin")  -- 注册内置效果
 local EffectRegistry = require("effects.EffectRegistry")
+local DialogManager = require("dialog.DialogManager")
+local DialogRenderer = require("dialog.DialogRenderer")
 
 local P = {}
 local levelEditor_ = EditorState.state
@@ -36,7 +38,13 @@ local EASE_FNS = {
 --- @param originY number 物件初始世界坐标 Y
 --- @return function evaluator(t:0-1) -> x, y
 local function createPathEvaluator(pathType, pathPoints, originX, originY)
-    if pathType == "linear" then
+    if pathType == "none" then
+        -- 瞬移：直接返回目标位置
+        local pt = pathPoints[1] or { x = originX, y = originY }
+        local endX = pt.x or originX
+        local endY = pt.y or originY
+        return function(_) return endX, endY end
+    elseif pathType == "linear" then
         -- pathPoints[1] = {x=目标X, y=目标Y}
         local pt = pathPoints[1] or { x = originX, y = originY }
         local endX = pt.x or originX
@@ -350,6 +358,7 @@ function P.StartPreview()
     levelEditor_.previewTriggeredSet = {}
     levelEditor_.previewInteractIdx = nil
     levelEditor_.previewItems = {}          -- 物品背包 { [itemName] = count }
+    levelEditor_.previewVars = {}           -- 运行时变量存储 { [varName] = number } (set_var写入, param读取)
     levelEditor_.previewDestroyedSet = {}   -- 被 destroy_self 销毁的对象索引集合
 
     -- 动作节点运行时状态
@@ -363,6 +372,9 @@ function P.StartPreview()
     levelEditor_.previewParticles = {}      -- 活跃粒子列表
     levelEditor_.previewSlowMotion = nil    -- 慢动作 {factor, duration, elapsed}
     levelEditor_.previewBaseOrthoSize = C.SCREEN_HEIGHT / C.PIXELS_PER_UNIT  -- 默认视野高度
+
+    -- 重置对话框状态
+    DialogManager.Reset()
 
     -- 将攻击模式的触发器注册为 Targetable 可索敌目标
     local Targetable = require("Targetable")
@@ -472,6 +484,9 @@ end
 function P.StopPreview()
     if not levelEditor_.previewActive then return end
 
+    -- 重置对话框
+    DialogManager.Reset()
+
     -- 把编辑器UI从预览根摘出（避免被Destroy一并销毁）
     if levelEditor_.uiRoot and levelEditor_.previewUIRoot then
         levelEditor_.previewUIRoot:RemoveChild(levelEditor_.uiRoot)
@@ -526,6 +541,7 @@ function P.StopPreview()
     levelEditor_.previewMotions = {}
     levelEditor_.previewObjFlipH = {}
     levelEditor_.previewObjOpacity = {}
+    levelEditor_.previewObjLayerOpacity = {}
     levelEditor_.previewCameraFx = {}
     levelEditor_.previewCameraZoom = nil
     levelEditor_.previewScreenFlash = nil
@@ -631,6 +647,9 @@ end
 --- 预览模式每帧更新（角色移动和相机）
 function P.UpdatePreview(dt)
     if not levelEditor_.previewActive then return end
+
+    -- 对话框计时更新（在物理/逻辑之前，使用真实dt）
+    DialogManager.Update(dt)
 
     local playerBody = levelEditor_.previewPlayerBody
     local playerNode = levelEditor_.previewPlayerNode
@@ -827,9 +846,14 @@ function P.UpdatePreview(dt)
         S.wingShatterTimer = C.WING_SHATTER_DURATION
     end
 
+    -- 对话框点击拦截（优先于攻击等其他输入）
+    if input:GetMouseButtonPress(MOUSEB_LEFT) and DialogManager.HandleClick() then
+        -- 点击被对话框消费，不继续传递
+    end
+
     -- 攻击（J键 / 鼠标左键）- 通过 Combat.CastSpell 触发投射物/近战
     -- 角色3没有攻击动作，跳过
-    local attackPressed = input:GetKeyPress(KEY_J) or input:GetMouseButtonPress(MOUSEB_LEFT)
+    local attackPressed = input:GetKeyPress(KEY_J) or (input:GetMouseButtonPress(MOUSEB_LEFT) and not DialogManager.IsBlocking())
     if S.currentCharacter ~= 3 and attackPressed and not S.isBlocking and not S.isCharging and not S.chargeReleased and not S.isAttacking then
         Combat.CastSpell()
     end
@@ -1070,7 +1094,24 @@ function P.UpdatePreview(dt)
         end
 
         -- 执行触发器策略 + 关联执行器
-        local stratCtx = { playerX = pCenterX, playerY = pCenterY, _trigObjIdx = trigIdx }
+        -- 构建完整运行时上下文（对齐 RUNTIME_PARAMS 定义）
+        local playerBody = levelEditor_.previewPlayerNode and levelEditor_.previewPlayerNode:GetComponent("RigidBody2D")
+        local playerVel = playerBody and playerBody:GetLinearVelocity() or Vector2(0, 0)
+        local stratCtx = {
+            playerX = pCenterX,
+            playerY = pCenterY,
+            playerSpeedX = playerVel.x,
+            playerSpeedY = playerVel.y,
+            playerOnGround = levelEditor_.previewOnGround and 1 or 0,
+            triggerX = trigCX,
+            triggerY = trigCY,
+            _trigObjIdx = trigIdx,
+        }
+        -- 注入持久化变量（set_var 写入的值，供 param 节点读取）
+        local vars = levelEditor_.previewVars or {}
+        for k, v in pairs(vars) do
+            stratCtx[k] = v
+        end
         local trigStratText = P._executeStrategy(obj, nil, stratCtx)
         if trigStratText then
             table.insert(popups, { text = trigStratText, x = trigCX, y = trigCY + trigHH + 1.2, timer = 0, maxTime = 2.5 })
@@ -1609,21 +1650,37 @@ function P.DrawPreview(vg, physW, physH)
                     if texImg then
                         local tScW = tLayer.scaleW or 1.0
                         local tScH = tLayer.scaleH or 1.0
-                        local drawW = pw * tScW
-                        local drawH = ph * tScH
-                        local alpha = (tLayer.opacity or 1.0) * eAlpha
+                        -- 图层独立动态效果
+                        local lEdx, lEdy, lEsc, lEang, lEalp = 0, 0, 1.0, 0, 1.0
+                        if tLayer.effects and #tLayer.effects > 0 then
+                            lEdx, lEdy, lEsc, lEang, lEalp = EffectRegistry.Apply(tLayer.effects, effectTime)
+                        end
+                        local drawW = pw * tScW * lEsc
+                        local drawH = ph * tScH * lEsc
+                        -- 位置偏移（像素单位，基于物件尺寸百分比，X右正 Y上正）+ 图层效果偏移
+                        local offX = (tLayer.offsetX or 0) * pw + lEdx * pw
+                        local offY = (tLayer.offsetY or 0) * ph + lEdy * ph
+                        local layerCX = sx + offX
+                        local layerCY = sy - offY
+                        -- 图层透明度：优先使用按图层的运行时覆盖
+                        local layerAlpha = tLayer.opacity or 1.0
+                        if levelEditor_.previewObjLayerOpacity and levelEditor_.previewObjLayerOpacity[i_obj] then
+                            local rtAlpha = levelEditor_.previewObjLayerOpacity[i_obj][tli]
+                            if rtAlpha then layerAlpha = rtAlpha end
+                        end
+                        local alpha = layerAlpha * eAlpha * lEalp
                         local tintColor = nvgRGBA(prevObjCol[1], prevObjCol[2], prevObjCol[3], math.floor((prevObjCol[4] or 255) * alpha))
-                        -- 贴图独立旋转
-                        local tRot = (tLayer.rotation or 0) * math.pi / 180
+                        -- 贴图独立旋转（静态 + 效果角度）
+                        local tRot = (tLayer.rotation or 0) * math.pi / 180 + lEang
                         if tRot ~= 0 then
                             nvgSave(vg)
-                            nvgTranslate(vg, sx, sy)
+                            nvgTranslate(vg, layerCX, layerCY)
                             nvgRotate(vg, tRot)
-                            nvgTranslate(vg, -sx, -sy)
+                            nvgTranslate(vg, -layerCX, -layerCY)
                         end
-                        local tPaint = nvgImagePatternTinted(vg, sx - drawW/2, sy - drawH/2, drawW, drawH, 0, texImg, tintColor)
+                        local tPaint = nvgImagePatternTinted(vg, layerCX - drawW/2, layerCY - drawH/2, drawW, drawH, 0, texImg, tintColor)
                         nvgBeginPath(vg)
-                        nvgRect(vg, sx - drawW/2, sy - drawH/2, drawW, drawH)
+                        nvgRect(vg, layerCX - drawW/2, layerCY - drawH/2, drawW, drawH)
                         nvgFillPaint(vg, tPaint)
                         nvgFill(vg)
                         if tRot ~= 0 then
@@ -1785,43 +1842,57 @@ function P.DrawPreview(vg, physW, physH)
         nvgFill(vg)
     end
 
-    -- 绘制光的碎片（菱形悬浮，围绕玩家）
+    -- 绘制光的碎片（图片特效，左/正面/右 顺序排列）
     local fragmentCount = (levelEditor_.previewItems or {})["light_fragment"] or 0
     if fragmentCount > 0 then
         local fragTime = time.elapsedTime
-        -- 菱形位置：1=左, 2=左+右, 3=左+右+后上方
+        local fragImg = GetNvgTexture(vg, "image/光之碎片持有特效.png")
+        -- 排列位置：1=左, 2=正面(中间), 3=右侧
         local fragPositions = {}
         if fragmentCount >= 1 then
-            fragPositions[1] = { dx = -1.0, dy = 0.6 }   -- 左侧
+            fragPositions[1] = { dx = -1.2, dy = 0.8 }   -- 左侧
         end
         if fragmentCount >= 2 then
-            fragPositions[2] = { dx = 1.0, dy = 0.6 }    -- 右侧
+            fragPositions[2] = { dx = 0.0, dy = 1.2 }    -- 正面（头顶上方）
         end
         if fragmentCount >= 3 then
-            fragPositions[3] = { dx = 0.0, dy = 1.4 }    -- 上方
+            fragPositions[3] = { dx = 1.2, dy = 0.8 }    -- 右侧
         end
         for fi, fp in ipairs(fragPositions) do
             -- 浮动动画：每个碎片相位不同
             local phase = fragTime * 2.5 + fi * 2.09
             local floatY = math.sin(phase) * 0.15
             local floatX = math.cos(phase * 0.7) * 0.05
+            -- 脉冲缩放动画
+            local pulse = 1.0 + math.sin(fragTime * 3.0 + fi * 1.5) * 0.08
             local fsx, fsy = worldToScreen(pPos.x + fp.dx + floatX, pPos.y + fp.dy + floatY)
-            local diamondSize = 0.25 * ppu
-            -- 菱形路径
+            local fragSize = 0.7 * ppu * pulse
             nvgSave(vg)
-            nvgTranslate(vg, fsx, fsy)
-            nvgRotate(vg, math.pi / 4)  -- 45度旋转正方形=菱形
-            -- 渐变填充：橙黄色
-            local gradPaint = nvgLinearGradient(vg, -diamondSize, -diamondSize, diamondSize, diamondSize,
-                nvgRGBA(255, 200, 50, 220), nvgRGBA(255, 140, 30, 220))
-            nvgBeginPath(vg)
-            nvgRect(vg, -diamondSize / 2, -diamondSize / 2, diamondSize, diamondSize)
-            nvgFillPaint(vg, gradPaint)
-            nvgFill(vg)
-            -- 发光边框
-            nvgStrokeColor(vg, nvgRGBA(255, 230, 100, 180))
-            nvgStrokeWidth(vg, 1.5)
-            nvgStroke(vg)
+            if fragImg then
+                -- 用图片纹理绘制
+                local paint = nvgImagePattern(vg, fsx - fragSize/2, fsy - fragSize/2, fragSize, fragSize, 0, fragImg, 1.0)
+                nvgBeginPath(vg)
+                nvgRect(vg, fsx - fragSize/2, fsy - fragSize/2, fragSize, fragSize)
+                nvgFillPaint(vg, paint)
+                nvgFill(vg)
+            else
+                -- fallback: 程序化四角星
+                local ds = fragSize * 0.5
+                nvgBeginPath(vg)
+                nvgMoveTo(vg, fsx, fsy - ds)          -- 上
+                nvgLineTo(vg, fsx + ds * 0.3, fsy - ds * 0.3)
+                nvgLineTo(vg, fsx + ds, fsy)          -- 右
+                nvgLineTo(vg, fsx + ds * 0.3, fsy + ds * 0.3)
+                nvgLineTo(vg, fsx, fsy + ds)          -- 下
+                nvgLineTo(vg, fsx - ds * 0.3, fsy + ds * 0.3)
+                nvgLineTo(vg, fsx - ds, fsy)          -- 左
+                nvgLineTo(vg, fsx - ds * 0.3, fsy - ds * 0.3)
+                nvgClosePath(vg)
+                local gradPaint = nvgLinearGradient(vg, fsx, fsy - ds, fsx, fsy + ds,
+                    nvgRGBA(255, 180, 50, 230), nvgRGBA(255, 120, 20, 230))
+                nvgFillPaint(vg, gradPaint)
+                nvgFill(vg)
+            end
             nvgRestore(vg)
         end
     end
@@ -2026,6 +2097,9 @@ function P.DrawPreview(vg, physW, physH)
             nvgFill(vg)
         end
     end
+
+    -- 对话框渲染（HUD最顶层）
+    DialogRenderer.Draw(vg, physW, physH)
 end
 
 -- ============================================================================
@@ -2044,6 +2118,20 @@ function P._executeActionSublist(actions, startIdx, context)
     for i = startIdx, #actions do
         local act = actions[i]
         local node = act.node or {}
+
+        -- 遇到 dialog 节点：显示对话框 + 阻塞后续动作，对话关闭后恢复执行
+        if act.nodeType == "dialog" then
+            local remainActions = actions
+            local nextIdx = i + 1
+            local ctx = context
+            DialogManager.Show(node, function()
+                -- 对话框关闭回调：恢复执行后续节点
+                if nextIdx <= #remainActions then
+                    P._executeActionSublist(remainActions, nextIdx, ctx)
+                end
+            end)
+            break  -- 中断当前循环，等对话关闭后回调恢复
+        end
 
         -- 遇到 delay 节点：将后续动作压入延迟队列，中断当前循环
         if act.nodeType == "delay" then
@@ -2120,15 +2208,76 @@ function P._executeActionSublist(actions, startIdx, context)
                     if #pathPoints == 0 then
                         pathPoints = { { x = 2, y = 0 } }
                     end
+
+                    -- "无"路径类型：瞬移到目标位置，不做动画
+                    local pathType = node.pathType or "linear"
+                    if pathType == "none" then
+                        local destX = node.teleportX or pos.x
+                        local destY = node.teleportY or pos.y
+                        -- 切换为运动学体以允许设置位置
+                        local body = targetNode:GetComponent("RigidBody2D")
+                        local wasStatic = false
+                        if body and body.bodyType == BT_STATIC then
+                            body.bodyType = BT_KINEMATIC
+                            wasStatic = true
+                        end
+                        targetNode:SetPosition2D(destX, destY)
+                        if body then body:SetAwake(true) end
+                        if wasStatic and body then body.bodyType = BT_STATIC end
+                        -- 瞬移也处理透明度（立即到达目标值）
+                        local opacityMode = node.opacityMode or "whole"
+                        local opacityTarget = node.opacityTarget
+                        if opacityMode == "layers" then
+                            local layerTargets = node.opacityLayerTargets or {}
+                            if #layerTargets > 0 or next(layerTargets) then
+                                if not levelEditor_.previewObjLayerOpacity then levelEditor_.previewObjLayerOpacity = {} end
+                                if not levelEditor_.previewObjLayerOpacity[targetIdx] then levelEditor_.previewObjLayerOpacity[targetIdx] = {} end
+                                for li, tgt in pairs(layerTargets) do
+                                    local liNum = tonumber(li) or li
+                                    levelEditor_.previewObjLayerOpacity[targetIdx][liNum] = tgt
+                                end
+                            end
+                        else
+                            if opacityTarget ~= nil then
+                                if not levelEditor_.previewObjOpacity then levelEditor_.previewObjOpacity = {} end
+                                levelEditor_.previewObjOpacity[targetIdx] = opacityTarget
+                            end
+                        end
+                        goto move_obj_done
+                    end
+
                     local easeName = node.moveEase or "easeOut"
                     -- 透明度动画：记录起始透明度
+                    local opacityMode = node.opacityMode or "whole"
                     local opacityTarget = node.opacityTarget
                     local opacityDuration = node.opacityDuration or 0.5
-                    local hasOpacity = (opacityTarget ~= nil and opacityTarget ~= 1.0) or (opacityDuration > 0 and opacityTarget ~= nil)
+                    local hasOpacity = false
                     local currentOpacity = 1.0
-                    if hasOpacity then
-                        if not levelEditor_.previewObjOpacity then levelEditor_.previewObjOpacity = {} end
-                        currentOpacity = levelEditor_.previewObjOpacity[targetIdx] or 1.0
+                    local layerOpacityFrom = nil
+                    local layerOpacityTargets = nil
+
+                    if opacityMode == "layers" then
+                        -- 按图层模式
+                        local layerTargets = node.opacityLayerTargets or {}
+                        if #layerTargets > 0 or next(layerTargets) then
+                            hasOpacity = true
+                            if not levelEditor_.previewObjLayerOpacity then levelEditor_.previewObjLayerOpacity = {} end
+                            if not levelEditor_.previewObjLayerOpacity[targetIdx] then levelEditor_.previewObjLayerOpacity[targetIdx] = {} end
+                            layerOpacityFrom = {}
+                            layerOpacityTargets = {}
+                            for li, tgt in pairs(layerTargets) do
+                                local liNum = tonumber(li) or li
+                                layerOpacityFrom[liNum] = levelEditor_.previewObjLayerOpacity[targetIdx][liNum] or 1.0
+                                layerOpacityTargets[liNum] = tgt
+                            end
+                        end
+                    else
+                        -- 整体模式（向后兼容）
+                        hasOpacity = (opacityTarget ~= nil and opacityTarget ~= 1.0) or (opacityDuration > 0 and opacityTarget ~= nil)
+                        if hasOpacity then
+                            if not levelEditor_.previewObjOpacity then levelEditor_.previewObjOpacity = {} end
+                            currentOpacity = levelEditor_.previewObjOpacity[targetIdx] or 1.0
+                        end
                     end
 
                     table.insert(levelEditor_.previewMotions, {
@@ -2147,11 +2296,15 @@ function P._executeActionSublist(actions, startIdx, context)
                         rotationDeg = node.rotationDeg or 0,
                         flipByMoveDir = node.flipByMoveDir or false,
                         -- 透明度动画
+                        opacityMode = opacityMode,
                         opacityFrom = currentOpacity,
                         opacityTarget = opacityTarget or 1.0,
                         opacityDuration = opacityDuration,
                         opacityElapsed = 0,
                         hasOpacity = hasOpacity,
+                        -- 按图层透明度
+                        layerOpacityFrom = layerOpacityFrom,
+                        layerOpacityTargets = layerOpacityTargets,
                         elapsed = 0,
                         phase = "forward",
                         repeatDone = 0,
@@ -2161,6 +2314,7 @@ function P._executeActionSublist(actions, startIdx, context)
                         prevX = pos.x,
                         originRotation = targetNode.rotation2D or 0,
                     })
+                    ::move_obj_done::
                 end
             end
         elseif act.nodeType == "play_fx" then
@@ -2245,6 +2399,23 @@ function P._executeActionSublist(actions, startIdx, context)
                     print("[PREVIEW] reset_trigger: 已重置触发器 #" .. targetIdx .. " (方式=" .. method .. ")")
                 end
             end
+
+        elseif act.nodeType == "set_var" then
+            -- 设置运行时变量（持久化到 previewVars，供 param 节点读取）
+            local vars = levelEditor_.previewVars or {}
+            local varName = node.varName or "custom1"
+            local mode = node.setMode or "set"
+            local newVal = tonumber(node.newValue) or 0
+            local oldVal = vars[varName] or 0
+            if mode == "set" then
+                vars[varName] = newVal
+            elseif mode == "add" then
+                vars[varName] = oldVal + newVal
+            elseif mode == "mul" then
+                vars[varName] = oldVal * newVal
+            end
+            levelEditor_.previewVars = vars
+            print("[PREVIEW] set_var: " .. varName .. " " .. mode .. " " .. tostring(newVal) .. " => " .. tostring(vars[varName]))
         end
     end
     levelEditor_.previewItems = items
@@ -2324,9 +2495,20 @@ function P._updateMotions(dt)
             if m.opacityDuration > 0 then
                 ot = math.min(1.0, m.opacityElapsed / m.opacityDuration)
             end
-            local newAlpha = m.opacityFrom + (m.opacityTarget - m.opacityFrom) * ot
-            if not levelEditor_.previewObjOpacity then levelEditor_.previewObjOpacity = {} end
-            levelEditor_.previewObjOpacity[m.objIdx] = newAlpha
+            if m.opacityMode == "layers" and m.layerOpacityFrom and m.layerOpacityTargets then
+                -- 按图层独立透明度
+                if not levelEditor_.previewObjLayerOpacity then levelEditor_.previewObjLayerOpacity = {} end
+                if not levelEditor_.previewObjLayerOpacity[m.objIdx] then levelEditor_.previewObjLayerOpacity[m.objIdx] = {} end
+                for li, fromVal in pairs(m.layerOpacityFrom) do
+                    local toVal = m.layerOpacityTargets[li] or 1.0
+                    levelEditor_.previewObjLayerOpacity[m.objIdx][li] = fromVal + (toVal - fromVal) * ot
+                end
+            else
+                -- 整体透明度（向后兼容）
+                local newAlpha = m.opacityFrom + (m.opacityTarget - m.opacityFrom) * ot
+                if not levelEditor_.previewObjOpacity then levelEditor_.previewObjOpacity = {} end
+                levelEditor_.previewObjOpacity[m.objIdx] = newAlpha
+            end
         end
 
         -- 阶段切换

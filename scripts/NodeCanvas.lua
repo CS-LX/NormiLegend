@@ -219,6 +219,12 @@ function M._buildInspector(nodeId)
                 end
                 if not visible then goto continueField end
             end
+            -- hideWhen 条件过滤：字段在节点某个属性匹配时隐藏
+            if field.hideWhen then
+                for condKey, condVal in pairs(field.hideWhen) do
+                    if node[condKey] == condVal then goto continueField end
+                end
+            end
 
             -- 字段标签
             table.insert(children, UI.Label {
@@ -676,6 +682,83 @@ function M._createFieldEditor(node, field)
             backgroundColor = {38, 38, 50, 200}, borderRadius = 4,
             paddingVertical = 4, paddingHorizontal = 2,
             children = optChildren,
+        }
+
+    elseif field.type == "layer_opacity_list" then
+        -- 图层透明度列表编辑器：根据目标物件的 texLayers 动态生成
+        local EditorState = require("editor.EditorState")
+        local edState = EditorState.state
+        local chKey = edState.chapterIdx .. "_" .. edState.levelIdx
+        local objects = edState.objects[chKey] or {}
+        local targetIdx = node.targetObjIdx or 0
+        local targetObj = objects[targetIdx]
+
+        local layerTargets = node[field.key]
+        if type(layerTargets) ~= "table" then layerTargets = {}; node[field.key] = layerTargets end
+
+        local layerChildren = {}
+
+        if not targetObj or not targetObj.texLayers or #targetObj.texLayers == 0 then
+            table.insert(layerChildren, UI.Label {
+                text = "目标物件无贴图图层", fontSize = 9, fontColor = {140, 120, 120, 180},
+            })
+        else
+            for li, tl in ipairs(targetObj.texLayers) do
+                local curVal = layerTargets[li]
+                if curVal == nil then curVal = 1.0 end
+                local layerName = tl.name or ("图层" .. li)
+                -- 截短名称
+                if #layerName > 8 then layerName = layerName:sub(1, 8) .. ".." end
+                table.insert(layerChildren, UI.Panel {
+                    flexDirection = "row", alignItems = "center", width = "100%", gap = 2,
+                    children = {
+                        UI.Label { text = li .. "." .. layerName, fontSize = 9, fontColor = {160, 180, 200, 200}, width = 60 },
+                        UI.Button {
+                            text = "−", fontSize = 12, width = 22, height = 22,
+                            backgroundColor = {60, 60, 80, 220}, borderRadius = 3,
+                            fontColor = {150, 200, 255, 255}, justifyContent = "center", alignItems = "center",
+                            onClick = function()
+                                local val = (layerTargets[li] or 1.0) - 0.1
+                                layerTargets[li] = math.max(0, val)
+                                state.inspectorNodeId = nil
+                                M._buildInspector(nodeRef.id)
+                            end,
+                        },
+                        UI.TextField {
+                            value = string.format("%.2f", curVal),
+                            fontSize = 10, height = 22, flexGrow = 1,
+                            backgroundColor = {45, 45, 60, 255}, fontColor = {200, 230, 255, 255},
+                            borderRadius = 3, paddingHorizontal = 3, textAlign = "center",
+                            onSubmit = function(self, txt)
+                                local v = tonumber(txt)
+                                if v then
+                                    layerTargets[li] = math.max(0, math.min(1, v))
+                                    state.inspectorNodeId = nil
+                                    M._buildInspector(nodeRef.id)
+                                end
+                            end,
+                        },
+                        UI.Button {
+                            text = "+", fontSize = 12, width = 22, height = 22,
+                            backgroundColor = {60, 60, 80, 220}, borderRadius = 3,
+                            fontColor = {150, 200, 255, 255}, justifyContent = "center", alignItems = "center",
+                            onClick = function()
+                                local val = (layerTargets[li] or 1.0) + 0.1
+                                layerTargets[li] = math.min(1, val)
+                                state.inspectorNodeId = nil
+                                M._buildInspector(nodeRef.id)
+                            end,
+                        },
+                    },
+                })
+            end
+        end
+
+        return UI.Panel {
+            width = "100%", flexDirection = "column", gap = 3,
+            backgroundColor = {38, 38, 50, 200}, borderRadius = 4,
+            paddingVertical = 4, paddingHorizontal = 4,
+            children = layerChildren,
         }
     end
 

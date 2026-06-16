@@ -25,6 +25,8 @@ M.state = {
     -- 世界坐标映射（米）
     worldW = 30,               -- 世界宽度（米）
     worldH = 17.5,             -- 世界高度（米）
+    -- 画布缩放
+    canvasZoom = 1.0,          -- 1.0 = 默认缩放
     -- 画布平移偏移（像素）
     canvasPanX = 0,
     canvasPanY = 0,
@@ -153,8 +155,9 @@ function M.WorldToCanvas(wx, wy, ww, wh)
     local worldH = M.state.worldH or 17.5
     if worldW <= 0 then worldW = 30 end
     if worldH <= 0 then worldH = 17.5 end
-    local scaleX = cW / worldW
-    local scaleY = cH / worldH
+    local zoom = M.state.canvasZoom or 1.0
+    local scaleX = cW / worldW * zoom
+    local scaleY = cH / worldH * zoom
     local px = wx * scaleX
     local py = wy * scaleY
     local pw = ww * scaleX
@@ -168,10 +171,11 @@ function M.CanvasToWorld(cx, cy, cw, ch)
     local canvasH = M.state.canvasH
     local worldW = M.state.worldW
     local worldH = M.state.worldH
-    local wx = cx / canvasW * worldW
-    local wy = cy / canvasH * worldH
-    local ww = cw / canvasW * worldW
-    local wh = ch / canvasH * worldH
+    local zoom = M.state.canvasZoom or 1.0
+    local wx = cx / (canvasW * zoom) * worldW
+    local wy = cy / (canvasH * zoom) * worldH
+    local ww = cw / (canvasW * zoom) * worldW
+    local wh = ch / (canvasH * zoom) * worldH
     return wx, wy, ww, wh
 end
 

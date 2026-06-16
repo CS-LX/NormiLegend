@@ -200,23 +200,33 @@ function R.DrawEditorCanvasTextures(vg, physW, physH)
                     local texImg = GetNvgTexture(vg, tLayer.path)
                     local tScW = tLayer.scaleW or 1.0
                     local tScH = tLayer.scaleH or 1.0
-                    local drawW = sw * tScW
-                    local drawH = sh * tScH
-                    local alpha = (tLayer.opacity or 1.0) * eAlpha
+                    -- 图层独立动态效果
+                    local lEdx, lEdy, lEsc, lEang, lEalp = 0, 0, 1.0, 0, 1.0
+                    if tLayer.effects and #tLayer.effects > 0 then
+                        lEdx, lEdy, lEsc, lEang, lEalp = EffectRegistry.Apply(tLayer.effects, effectTime)
+                    end
+                    local drawW = sw * tScW * lEsc
+                    local drawH = sh * tScH * lEsc
+                    -- 位置偏移（基于物件尺寸百分比，X右正 Y上正）+ 图层效果偏移
+                    local offX = (tLayer.offsetX or 0) * sw + lEdx * sw
+                    local offY = (tLayer.offsetY or 0) * sh + lEdy * sh
+                    local layerCX = cx + offX
+                    local layerCY = cy - offY
+                    local alpha = (tLayer.opacity or 1.0) * eAlpha * lEalp
 
                     if texImg then
-                        -- 贴图独立旋转
-                        local tRot = (tLayer.rotation or 0) * math.pi / 180
+                        -- 贴图独立旋转（静态 + 效果角度）
+                        local tRot = (tLayer.rotation or 0) * math.pi / 180 + lEang
                         if tRot ~= 0 then
                             nvgSave(vg)
-                            nvgTranslate(vg, cx, cy)
+                            nvgTranslate(vg, layerCX, layerCY)
                             nvgRotate(vg, tRot)
-                            nvgTranslate(vg, -cx, -cy)
+                            nvgTranslate(vg, -layerCX, -layerCY)
                         end
                         local tintColor = nvgRGBA(objCol[1], objCol[2], objCol[3], math.floor((objCol[4] or 255) * alpha))
-                        local paint = nvgImagePatternTinted(vg, cx - drawW/2, cy - drawH/2, drawW, drawH, 0, texImg, tintColor)
+                        local paint = nvgImagePatternTinted(vg, layerCX - drawW/2, layerCY - drawH/2, drawW, drawH, 0, texImg, tintColor)
                         nvgBeginPath(vg)
-                        nvgRect(vg, cx - drawW/2, cy - drawH/2, drawW, drawH)
+                        nvgRect(vg, layerCX - drawW/2, layerCY - drawH/2, drawW, drawH)
                         nvgFillPaint(vg, paint)
                         nvgFill(vg)
                         if tRot ~= 0 then

@@ -271,6 +271,7 @@ M.FX_TYPES = {
 
 -- 移动路径类型
 M.PATH_TYPES = {
+    { id = "none",     label = "无（瞬移）" },
     { id = "linear",   label = "直线" },
     { id = "bezier",   label = "贝塞尔曲线" },
     { id = "circle",   label = "圆形轨迹" },
@@ -295,12 +296,18 @@ M.FLASH_COLORS = {
     { id = "green",  label = "绿色" },
 }
 
--- 对话类型
+-- 对话类型（旧版兼容，新版使用组件化配置）
 M.DIALOG_STYLES = {
     { id = "popup",      label = "居中弹窗" },
     { id = "banner_top", label = "顶部横幅" },
     { id = "subtitle",   label = "底部字幕" },
     { id = "bubble",     label = "气泡对话" },
+}
+
+-- 对话持续模式
+M.DIALOG_DURATION_MODES = {
+    { id = "timed", label = "定时关闭" },
+    { id = "click", label = "点击继续" },
 }
 
 -- 移动缓动类型
@@ -329,6 +336,7 @@ M.RUNTIME_PARAMS = {
     { id = "custom1",       label = "自定义1" },
     { id = "custom2",       label = "自定义2" },
     { id = "custom3",       label = "自定义3" },
+    { id = "altar_active",  label = "祭坛开启" },
 }
 
 -- 胜负判定类型
@@ -414,16 +422,22 @@ M.INSPECTOR_FIELDS = {
     move_obj = {
         { key = "targetObjIdx", label = "目标物件", type = "obj_select", default = 0 },
         { key = "pathType", label = "路径类型", type = "select", options = "PATH_TYPES", default = "linear" },
-        { key = "pathPoints", label = "路径编辑", type = "path_editor", default = {} },
-        { key = "moveDuration", label = "单程时间(秒)", type = "float", min = 0.1, max = 60, step = 0.1, default = 1.0 },
-        { key = "moveEase", label = "缓动", type = "select", options = "EASE_TYPES", default = "easeOut" },
-        { key = "moveRoundTrip", label = "往返移动", type = "bool", default = false },
-        { key = "moveLoop", label = "循环执行", type = "bool", default = false },
-        { key = "moveRepeatCount", label = "执行次数", type = "int", min = 1, max = 999, step = 1, default = 1 },
-        { key = "rotationDeg", label = "旋转(度)", type = "float", min = -360, max = 360, step = 5, default = 0 },
-        { key = "flipByMoveDir", label = "朝向跟随移动方向", type = "bool", default = false },
-        { key = "opacityTarget", label = "目标透明度", type = "float", min = 0, max = 1, step = 0.05, default = 1.0 },
-        { key = "opacityDuration", label = "渐变时间(秒)", type = "float", min = 0, max = 60, step = 0.1, default = 0.5 },
+        -- 瞬移模式：目标坐标
+        { key = "teleportX", label = "目标X(米)", type = "float", min = -100, max = 100, step = 0.5, default = 0, showWhen = { pathType = "none" } },
+        { key = "teleportY", label = "目标Y(米)", type = "float", min = -100, max = 100, step = 0.5, default = 0, showWhen = { pathType = "none" } },
+        -- 路径动画模式字段（瞬移时隐藏）
+        { key = "pathPoints", label = "路径编辑", type = "path_editor", default = {}, hideWhen = { pathType = "none" } },
+        { key = "moveDuration", label = "单程时间(秒)", type = "float", min = 0.1, max = 60, step = 0.1, default = 1.0, hideWhen = { pathType = "none" } },
+        { key = "moveEase", label = "缓动", type = "select", options = "EASE_TYPES", default = "easeOut", hideWhen = { pathType = "none" } },
+        { key = "moveRoundTrip", label = "往返移动", type = "bool", default = false, hideWhen = { pathType = "none" } },
+        { key = "moveLoop", label = "循环执行", type = "bool", default = false, hideWhen = { pathType = "none" } },
+        { key = "moveRepeatCount", label = "执行次数", type = "int", min = 1, max = 999, step = 1, default = 1, hideWhen = { pathType = "none" } },
+        { key = "rotationDeg", label = "旋转(度)", type = "float", min = -360, max = 360, step = 5, default = 0, hideWhen = { pathType = "none" } },
+        { key = "flipByMoveDir", label = "朝向跟随移动方向", type = "bool", default = false, hideWhen = { pathType = "none" } },
+        { key = "opacityMode", label = "透明度模式", type = "select", options = {{id="whole",label="整体"},{id="layers",label="按图层"}}, default = "whole" },
+        { key = "opacityTarget", label = "目标透明度", type = "float", min = 0, max = 1, step = 0.05, default = 1.0, showWhen = { opacityMode = "whole" } },
+        { key = "opacityLayerTargets", label = "图层透明度", type = "layer_opacity_list", default = {}, showWhen = { opacityMode = "layers" } },
+        { key = "opacityDuration", label = "渐变时间(秒)", type = "float", min = 0, max = 60, step = 0.1, default = 0.5, hideWhen = { pathType = "none" } },
     },
     set_var = {
         { key = "varName", label = "变量名", type = "select", options = "RUNTIME_PARAMS", default = "custom1" },
@@ -453,10 +467,32 @@ M.INSPECTOR_FIELDS = {
         { key = "slowDuration", label = "持续时间(秒)", type = "float", min = 0.1, max = 10, step = 0.1, default = 1.0, showWhen = { fxType = "slow_motion" } },
     },
     dialog = {
+        -- 基础内容
         { key = "dialogText", label = "对话内容", type = "text", default = "你好！" },
-        { key = "dialogStyle", label = "样式", type = "select", options = "DIALOG_STYLES", default = "popup" },
-        { key = "dialogDuration", label = "显示时间(秒)", type = "float", min = 0.5, max = 30, step = 0.5, default = 3.0 },
-        { key = "dialogSpeaker", label = "说话人", type = "text", default = "" },
+        { key = "dlgSpeaker", label = "说话人名称", type = "text", default = "" },
+        -- 持续时间
+        { key = "dlgDurationMode", label = "持续模式", type = "select", options = "DIALOG_DURATION_MODES", default = "timed" },
+        { key = "dlgDuration", label = "显示时间(秒)", type = "float", min = 0.5, max = 30, step = 0.5, default = 3.0, showWhen = { dlgDurationMode = "timed" } },
+        -- 底图组件
+        { key = "dlgBgTexture", label = "底图贴图", type = "text", default = "" },
+        { key = "dlgBgOffsetX", label = "底图偏X", type = "float", min = -500, max = 500, step = 1, default = 0 },
+        { key = "dlgBgOffsetY", label = "底图偏Y", type = "float", min = -500, max = 500, step = 1, default = -120 },
+        { key = "dlgBgOpacity", label = "底图透明度", type = "float", min = 0, max = 1, step = 0.05, default = 1.0 },
+        -- 立绘组件
+        { key = "dlgPortraitTexture", label = "立绘贴图", type = "text", default = "" },
+        { key = "dlgPortraitOffsetX", label = "立绘偏X", type = "float", min = -500, max = 500, step = 1, default = -200 },
+        { key = "dlgPortraitOffsetY", label = "立绘偏Y", type = "float", min = -500, max = 500, step = 1, default = -180 },
+        { key = "dlgPortraitOpacity", label = "立绘透明度", type = "float", min = 0, max = 1, step = 0.05, default = 1.0 },
+        -- 名牌组件
+        { key = "dlgNameTexture", label = "名牌底图", type = "text", default = "" },
+        { key = "dlgNameOffsetX", label = "名牌偏X", type = "float", min = -500, max = 500, step = 1, default = -100 },
+        { key = "dlgNameOffsetY", label = "名牌偏Y", type = "float", min = -500, max = 500, step = 1, default = -140 },
+        { key = "dlgNameOpacity", label = "名牌透明度", type = "float", min = 0, max = 1, step = 0.05, default = 1.0 },
+        -- 文本框组件
+        { key = "dlgTextTexture", label = "文本底图", type = "text", default = "" },
+        { key = "dlgTextOffsetX", label = "文本偏X", type = "float", min = -500, max = 500, step = 1, default = 0 },
+        { key = "dlgTextOffsetY", label = "文本偏Y", type = "float", min = -500, max = 500, step = 1, default = -70 },
+        { key = "dlgTextOpacity", label = "文本透明度", type = "float", min = 0, max = 1, step = 0.05, default = 1.0 },
     },
     damage = {
         { key = "damageAmount", label = "数值", type = "float", min = -100, max = 100, step = 1, default = 10 },
@@ -523,10 +559,10 @@ local NODE_DEFAULTS = {
     repeat_n  = { repeatCount = 3, count = nil, bodyNode = nil, outputNode = nil },
     break_flow = { outputNode = nil },
     spawn     = { spawnType = "enemy_melee", spawnCount = 1, spawnDir = "auto", spawnX = nil, spawnY = nil, outputNode = nil },
-    move_obj  = { targetObjIdx = 0, pathType = "linear", pathPoints = {}, moveDuration = 1.0, moveEase = "easeOut", moveRoundTrip = false, moveLoop = false, moveRepeatCount = 1, rotationDeg = 0, flipByMoveDir = false, opacityTarget = 1.0, opacityDuration = 0.5, outputNode = nil },
+    move_obj  = { targetObjIdx = 0, pathType = "linear", pathPoints = {}, moveDuration = 1.0, moveEase = "easeOut", moveRoundTrip = false, moveLoop = false, moveRepeatCount = 1, rotationDeg = 0, flipByMoveDir = false, opacityMode = "whole", opacityTarget = 1.0, opacityLayerTargets = {}, opacityDuration = 0.5, teleportX = 0, teleportY = 0, outputNode = nil },
     set_var   = { varName = "custom1", setMode = "set", newValue = nil, outputNode = nil },
     play_fx   = { fxType = "sound", soundFile = "", soundVolume = 1.0, shakeDuration = 0.3, shakeIntensity = 1.0, flashColor = "white", flashDuration = 0.2, floatText = "", floatColor = "white", floatSize = 24, particleDir = "up", particleCount = 10, particleSpeed = 3.0, slowFactor = 0.3, slowDuration = 1.0, outputNode = nil },
-    dialog    = { dialogText = "你好！", dialogStyle = "popup", dialogDuration = 3.0, dialogSpeaker = "", textInput = nil, outputNode = nil },
+    dialog    = { dialogText = "你好！", dlgSpeaker = "", dlgDurationMode = "timed", dlgDuration = 3.0, dlgBgTexture = "", dlgBgOffsetX = 0, dlgBgOffsetY = -120, dlgBgOpacity = 1.0, dlgPortraitTexture = "", dlgPortraitOffsetX = -200, dlgPortraitOffsetY = -180, dlgPortraitOpacity = 1.0, dlgNameTexture = "", dlgNameOffsetX = -100, dlgNameOffsetY = -140, dlgNameOpacity = 1.0, dlgTextTexture = "", dlgTextOffsetX = 0, dlgTextOffsetY = -70, dlgTextOpacity = 1.0, textInput = nil, outputNode = nil },
     damage    = { damageAmount = 10, damageIsHeal = false, amount = nil, outputNode = nil },
     win_level = { winType = "win" },
     camera_zoom = { zoomScale = 1.0, zoomUsePan = false, zoomCenterX = 15.0, zoomCenterY = 8.75, zoomDuration = 0.5, zoomEase = "easeOut", zoomAutoRestore = false, zoomHoldDuration = 3.0, zoomRestoreDuration = 0.5, zoomRestoreEase = "easeOut", zoomLevel = nil, outputNode = nil },
@@ -608,7 +644,11 @@ function M.RemoveNode(tree, nodeId)
         itemAmount = true, zoomScale = true, zoomDuration = true,
         soundVolume = true, shakeDuration = true, shakeIntensity = true,
         flashDuration = true, floatSize = true, particleCount = true,
-        particleSpeed = true, slowFactor = true, slowDuration = true }
+        particleSpeed = true, slowFactor = true, slowDuration = true,
+        dlgDuration = true, dlgBgOffsetX = true, dlgBgOffsetY = true, dlgBgOpacity = true,
+        dlgPortraitOffsetX = true, dlgPortraitOffsetY = true, dlgPortraitOpacity = true,
+        dlgNameOffsetX = true, dlgNameOffsetY = true, dlgNameOpacity = true,
+        dlgTextOffsetX = true, dlgTextOffsetY = true, dlgTextOpacity = true }
     for _, n in pairs(tree.nodes) do
         for k, v in pairs(n) do
             if type(v) == "number" and v == nodeId and not skipKeys[k] then

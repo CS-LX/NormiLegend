@@ -135,30 +135,33 @@ function M.BuildLevelEditorUI()
     -- 画布内容容器（所有网格/背景/物件都在此容器内，平移时只需偏移此容器）
     local panX = levelEditor_.canvasPanX or 0
     local panY = levelEditor_.canvasPanY or 0
+    local zoom = levelEditor_.canvasZoom or 1.0
+    local contentW = math.ceil(canvasW * zoom)
+    local contentH = math.ceil(canvasH * zoom)
     local canvasContent = UI.Panel {
         id = "canvas_content",
         position = "absolute", left = panX, top = panY,
-        width = canvasW, height = canvasH,
+        width = contentW, height = contentH,
         backgroundColor = {0, 0, 0, 0},
         pointerEvents = "box-none",  -- 容器自身不拦截点击，但子元素（物件按钮）可被点击
     }
 
     -- 绘制网格线（用细条Panel模拟）
-    local gridSize = levelEditor_.gridSize
+    local gridSize = levelEditor_.gridSize * zoom
     -- 垂直线
-    for gx = 0, canvasW, gridSize do
+    for gx = 0, contentW, gridSize do
         canvasContent:AddChild(UI.Panel {
             position = "absolute", top = 0, left = gx,
-            width = 1, height = canvasH,
+            width = 1, height = contentH,
             backgroundColor = {40, 40, 60, 80},
             pointerEvents = "none",
         })
     end
     -- 水平线
-    for gy = 0, canvasH, gridSize do
+    for gy = 0, contentH, gridSize do
         canvasContent:AddChild(UI.Panel {
             position = "absolute", top = gy, left = 0,
-            width = canvasW, height = 1,
+            width = contentW, height = 1,
             backgroundColor = {40, 40, 60, 80},
             pointerEvents = "none",
         })
@@ -1078,6 +1081,199 @@ function M.BuildPropsPanel(panel, objects)
                 panel:AddChild(makeTexLayerRow("旋转:", selTLayer.rotation or 0, function(v)
                     selTLayer.rotation = v % 360
                 end, 15, "%.0f°"))
+                -- 位置偏移X（物件尺寸百分比）
+                panel:AddChild(makeTexLayerRow("偏X:", selTLayer.offsetX or 0, function(v)
+                    selTLayer.offsetX = v
+                end, 0.05, "%.2f"))
+                -- 位置偏移Y（物件尺寸百分比）
+                panel:AddChild(makeTexLayerRow("偏Y:", selTLayer.offsetY or 0, function(v)
+                    selTLayer.offsetY = v
+                end, 0.05, "%.2f"))
+
+                -- ====== 贴图图层动态效果 ======
+                panel:AddChild(UI.Panel { width = "100%", height = 1, backgroundColor = {80,120,180,80}, marginTop = 4, marginBottom = 3 })
+                panel:AddChild(UI.Label { text = "图层动态效果", fontSize = 10, fontColor = {80, 180, 255, 220} })
+                if not selTLayer.effects then selTLayer.effects = {} end
+                local TLEffectRegistry = require("effects.EffectRegistry")
+                if #selTLayer.effects > 0 then
+                    for tlei = 1, #selTLayer.effects do
+                        local tlEff = selTLayer.effects[tlei]
+                        local tlEffDef = TLEffectRegistry.Get(tlEff.id)
+                        local tlEffName = tlEffDef and tlEffDef.name or tlEff.id
+                        local tlEffRow = UI.Panel { flexDirection = "row", alignItems = "center", gap = 3, width = "100%", marginBottom = 2 }
+                        tlEffRow:AddChild(UI.Label { text = tlEffName, fontSize = 9, fontColor = {160, 210, 255, 220}, flexGrow = 1 })
+                        if tlEffDef and tlEffDef.params_schema and #tlEffDef.params_schema > 0 then
+                            tlEffRow:AddChild(UI.Button {
+                                text = "参数", fontSize = 8,
+                                paddingLeft = 5, paddingRight = 5, paddingTop = 1, paddingBottom = 1,
+                                backgroundColor = {50, 70, 110, 200}, borderRadius = 2,
+                                fontColor = {160, 200, 255, 220},
+                                onClick = function()
+                                    tlEff._expanded = not tlEff._expanded
+                                    M.BuildLevelEditorUI()
+                                end,
+                            })
+                        end
+                        tlEffRow:AddChild(UI.Button {
+                            text = "×", fontSize = 10,
+                            paddingLeft = 4, paddingRight = 4, paddingTop = 1, paddingBottom = 1,
+                            backgroundColor = {130, 40, 40, 200}, borderRadius = 2,
+                            fontColor = {255, 180, 180, 255},
+                            onClick = function()
+                                getTitleMenu().PushUndoState()
+                                table.remove(selTLayer.effects, tlei)
+                                M.BuildLevelEditorUI()
+                            end,
+                        })
+                        panel:AddChild(tlEffRow)
+                        -- 参数展开编辑
+                        if tlEff._expanded and tlEffDef and tlEffDef.params_schema then
+                            if not tlEff.params then tlEff.params = {} end
+                            for _, schema in ipairs(tlEffDef.params_schema) do
+                                local pKey = schema.key
+                                local pVal = tlEff.params[pKey]
+                                if pVal == nil then pVal = schema.default end
+                                local pRow = UI.Panel { flexDirection = "row", alignItems = "center", gap = 3, width = "100%", marginBottom = 1, paddingLeft = 8 }
+                                pRow:AddChild(UI.Label { text = schema.label or pKey, fontSize = 8, fontColor = {130, 160, 200, 180}, width = 55 })
+                                if schema.type == "texture" then
+                                    local currentPath = tostring(pVal)
+                                    local shortName = currentPath ~= "" and currentPath:match("[^/]+$") or "(无)"
+                                    local isOpen = tlEff._texPickerOpen
+                                    pRow:AddChild(UI.Button {
+                                        text = (isOpen and "▼" or "▶") .. " " .. shortName, fontSize = 8, flexGrow = 1, height = 18,
+                                        backgroundColor = {40, 50, 80, 255}, borderRadius = 2,
+                                        borderWidth = 1, borderColor = isOpen and {100, 160, 255, 200} or {80, 120, 200, 180},
+                                        fontColor = {180, 210, 255, 255}, paddingLeft = 4,
+                                        onClick = function()
+                                            tlEff._texPickerOpen = not tlEff._texPickerOpen
+                                            M.BuildLevelEditorUI()
+                                        end,
+                                    })
+                                    panel:AddChild(pRow)
+                                    if isOpen then
+                                        local texList = levelEditor_.customTextures or {}
+                                        if schema.cat_filter or (pKey == "path" and tlEff.id == "spritesheet") then
+                                            local filtered = {}
+                                            local filterCat = schema.cat_filter or "seq"
+                                            for _, ta in ipairs(texList) do
+                                                local c = ta.cat or "other"
+                                                if c == filterCat or c == "sequence" then table.insert(filtered, ta) end
+                                            end
+                                            texList = filtered
+                                        end
+                                        local pickerPanel = UI.Panel {
+                                            width = "100%", paddingLeft = 12, marginBottom = 3,
+                                            maxHeight = 120, overflow = "scroll",
+                                            backgroundColor = {25, 30, 42, 200}, borderRadius = 2,
+                                            paddingVertical = 2, paddingRight = 3,
+                                            borderWidth = 1, borderColor = {60, 80, 120, 150},
+                                        }
+                                        pickerPanel:AddChild(UI.Button {
+                                            text = "✕ 清空", fontSize = 7, width = "100%", height = 16,
+                                            paddingLeft = 5, backgroundColor = {80, 40, 40, 200}, borderRadius = 2,
+                                            fontColor = {255, 180, 180, 255}, marginBottom = 2,
+                                            onClick = function()
+                                                getTitleMenu().PushUndoState()
+                                                tlEff.params[pKey] = ""
+                                                tlEff._texPickerOpen = false
+                                                M.BuildLevelEditorUI()
+                                            end,
+                                        })
+                                        for _, texAsset in ipairs(texList) do
+                                            local texPath = texAsset.path or ""
+                                            local texName = texAsset.name or texPath:match("[^/]+$") or texPath
+                                            local isCurrent = (texPath == currentPath)
+                                            pickerPanel:AddChild(UI.Button {
+                                                text = (isCurrent and "● " or "  ") .. texName, fontSize = 7,
+                                                width = "100%", height = 16, paddingLeft = 5,
+                                                backgroundColor = isCurrent and {50, 80, 140, 255} or {30, 40, 60, 180},
+                                                borderRadius = 2, fontColor = isCurrent and {255, 255, 255, 255} or {160, 190, 220, 220},
+                                                onClick = function()
+                                                    getTitleMenu().PushUndoState()
+                                                    tlEff.params[pKey] = texPath
+                                                    tlEff._texPickerOpen = false
+                                                    M.BuildLevelEditorUI()
+                                                end,
+                                            })
+                                        end
+                                        if #texList == 0 then
+                                            pickerPanel:AddChild(UI.Label { text = "无可用贴图", fontSize = 7, fontColor = {120, 120, 140, 180} })
+                                        end
+                                        panel:AddChild(pickerPanel)
+                                    end
+                                elseif schema.type == "bool" then
+                                    local boolVal = (tonumber(pVal) or 0) ~= 0
+                                    pRow:AddChild(UI.Button {
+                                        text = boolVal and "ON" or "OFF", fontSize = 8, width = 36, height = 18,
+                                        backgroundColor = boolVal and {40, 120, 80, 255} or {80, 40, 40, 255},
+                                        borderRadius = 9, fontColor = {255, 255, 255, 255},
+                                        onClick = function()
+                                            getTitleMenu().PushUndoState()
+                                            tlEff.params[pKey] = boolVal and 0 or 1
+                                            M.BuildLevelEditorUI()
+                                        end,
+                                    })
+                                    panel:AddChild(pRow)
+                                else
+                                    pRow:AddChild(UI.TextField {
+                                        value = tostring(pVal), fontSize = 8, width = 50, height = 18,
+                                        backgroundColor = {30, 35, 55, 255}, fontColor = {190, 210, 255, 255},
+                                        borderRadius = 2, paddingHorizontal = 3,
+                                        onSubmit = function(self, txt)
+                                            getTitleMenu().PushUndoState()
+                                            local numVal = tonumber(txt)
+                                            if numVal then
+                                                if schema.min then numVal = math.max(schema.min, numVal) end
+                                                if schema.max then numVal = math.min(schema.max, numVal) end
+                                                tlEff.params[pKey] = numVal
+                                            end
+                                            M.BuildLevelEditorUI()
+                                        end,
+                                        onBlur = function(self)
+                                            local txt = self:GetValue()
+                                            local numVal = tonumber(txt)
+                                            if numVal then
+                                                if schema.min then numVal = math.max(schema.min, numVal) end
+                                                if schema.max then numVal = math.min(schema.max, numVal) end
+                                                tlEff.params[pKey] = numVal
+                                            end
+                                        end,
+                                    })
+                                    if schema.min and schema.max then
+                                        pRow:AddChild(UI.Label { text = string.format("[%.1f~%.1f]", schema.min, schema.max), fontSize = 7, fontColor = {90, 110, 140, 130} })
+                                    end
+                                    panel:AddChild(pRow)
+                                end
+                            end
+                        end
+                    end
+                else
+                    panel:AddChild(UI.Label { text = "无动态效果", fontSize = 8, fontColor = {90, 130, 170, 130}, marginBottom = 1 })
+                end
+                -- 添加图层效果按钮行
+                local tlAllEffIds = TLEffectRegistry.GetIds()
+                local tlAddRow = UI.Panel { flexDirection = "row", alignItems = "center", gap = 3, width = "100%", marginTop = 2, flexWrap = "wrap" }
+                for _, effId in ipairs(tlAllEffIds) do
+                    local effDef = TLEffectRegistry.Get(effId)
+                    tlAddRow:AddChild(UI.Button {
+                        text = "+" .. (effDef and effDef.name or effId), fontSize = 8,
+                        paddingLeft = 5, paddingRight = 5, paddingTop = 2, paddingBottom = 2,
+                        backgroundColor = {35, 60, 100, 200}, borderRadius = 2,
+                        fontColor = {120, 190, 255, 220},
+                        onClick = function()
+                            getTitleMenu().PushUndoState()
+                            local params = {}
+                            if effDef and effDef.params_schema then
+                                for _, schema in ipairs(effDef.params_schema) do
+                                    params[schema.key] = schema.default
+                                end
+                            end
+                            table.insert(selTLayer.effects, { id = effId, params = params })
+                            M.BuildLevelEditorUI()
+                        end,
+                    })
+                end
+                panel:AddChild(tlAddRow)
             end
         elseif objTexExpanded then
             panel:AddChild(UI.Label { text = "无贴图图层\n选择贴图工具添加", fontSize = 9, fontColor = {140,120,180,180}, marginTop = 2 })

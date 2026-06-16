@@ -706,7 +706,7 @@ function M.PushUndoState()
         if obj.texLayers and #obj.texLayers > 0 then
             copy.texLayers = {}
             for _, layer in ipairs(obj.texLayers) do
-                table.insert(copy.texLayers, {
+                local layerCopy = {
                     path = layer.path,
                     name = layer.name,
                     opacity = layer.opacity,
@@ -715,7 +715,21 @@ function M.PushUndoState()
                     visible = layer.visible,
                     lockAspect = layer.lockAspect,
                     rotation = layer.rotation,
-                })
+                    offsetX = layer.offsetX,
+                    offsetY = layer.offsetY,
+                }
+                -- 图层独立动态效果（深拷贝）
+                if layer.effects and #layer.effects > 0 then
+                    layerCopy.effects = {}
+                    for _, eff in ipairs(layer.effects) do
+                        local paramsCopy = {}
+                        if eff.params then
+                            for k, v in pairs(eff.params) do paramsCopy[k] = v end
+                        end
+                        table.insert(layerCopy.effects, { id = eff.id, params = paramsCopy })
+                    end
+                end
+                table.insert(copy.texLayers, layerCopy)
             end
             copy.selectedTexLayer = obj.selectedTexLayer
         end
@@ -766,6 +780,7 @@ function M.PushUndoState()
                 path = bg.path, name = bg.name, opacity = bg.opacity,
                 x = bg.x, y = bg.y, w = bg.w, h = bg.h,
                 depth = bg.depth, visible = bg.visible, lockAspect = bg.lockAspect,
+                locked = bg.locked,
             }
             -- 背景图层动态效果
             if bg.effects and #bg.effects > 0 then
@@ -895,6 +910,38 @@ function M.UpdateLevelEditor(dt)
         end
     end
 
+    -- 鼠标滚轮缩放画布（无文本聚焦 + 鼠标不在inspector面板上）
+    local dprZ = graphics:GetDPR()
+    local mouseXLogical = input.mousePosition.x / dprZ
+    local screenWLogical = graphics:GetWidth() / dprZ
+    local rightPanelW = 280
+    local marginZ = levelEditor_.margin or 8
+    local mouseOverInspector = mouseXLogical > (screenWLogical - rightPanelW - marginZ)
+    if not isTextInput and not mouseOverInspector then
+        local wheel = input.mouseMoveWheel
+        if wheel ~= 0 then
+            local oldZoom = levelEditor_.canvasZoom or 1.0
+            local newZoom = oldZoom * (1.0005 ^ wheel)
+            newZoom = math.max(0.3, math.min(3.0, newZoom))
+            -- 以鼠标位置为中心缩放（调整 pan 使鼠标指向的世界点不变）
+            local dpr2 = graphics:GetDPR()
+            local mxz = input.mousePosition.x / dpr2
+            local myz = input.mousePosition.y / dpr2
+            local canvasOffXz = levelEditor_.margin or 8
+            local canvasOffYz = (levelEditor_.toolbarH or 50) + (levelEditor_.margin or 8)
+            local localMX = mxz - canvasOffXz
+            local localMY = myz - canvasOffYz
+            local ratio = newZoom / oldZoom
+            local panX = levelEditor_.canvasPanX or 0
+            local panY = levelEditor_.canvasPanY or 0
+            levelEditor_.canvasPanX = localMX - (localMX - panX) * ratio
+            levelEditor_.canvasPanY = localMY - (localMY - panY) * ratio
+            levelEditor_.canvasZoom = newZoom
+            -- 实时重建 UI（网格线、背景图层等跟随缩放更新）
+            M.BuildLevelEditorUI()
+        end
+    end
+
     -- 每帧更新鼠标世界坐标显示
     if levelEditor_.uiRoot then
         local coordLabel = levelEditor_.uiRoot:FindById("canvas_mouse_coord")
@@ -908,7 +955,8 @@ function M.UpdateLevelEditor(dt)
             local panY = levelEditor_.canvasPanY or 0
             local canvasMouseX = mx - margin - panX
             local canvasMouseY = my - (toolbarH + margin) - panY
-            local gridSize = levelEditor_.gridSize or 40
+            local zoom = levelEditor_.canvasZoom or 1.0
+            local gridSize = (levelEditor_.gridSize or 40) * zoom
             local worldH = levelEditor_.worldH or 17.5
             local wx = canvasMouseX / gridSize
             local wy = worldH - (canvasMouseY / gridSize)
@@ -1035,7 +1083,7 @@ function M.UpdateLevelEditor(dt)
     local key = ch .. "_" .. lv
     local objects = levelEditor_.objects[key] or {}
     ---@type number
-    local gridSize = levelEditor_.gridSize
+    local gridSize = levelEditor_.gridSize * (levelEditor_.canvasZoom or 1.0)
     ---@type number
     local canvasOffX = levelEditor_.margin
     ---@type number
@@ -1103,6 +1151,25 @@ function M.UpdateLevelEditor(dt)
                             break
                         end
                     end
+                    -- 未命中四角锚点 → 检测贴图内部区域拖拽移动（修改 offsetX/offsetY）
+                    if not levelEditor_.texDragging then
+                        local offX = (tLayer.offsetX or 0) * pw
+                        local offY = (tLayer.offsetY or 0) * ph
+                        local layerCX = px + pw / 2 + offX - tW / 2
+                        local layerCY = py + ph / 2 - offY - tH / 2
+                        if contentX >= layerCX and contentX <= layerCX + tW
+                           and contentY >= layerCY and contentY <= layerCY + tH then
+                            levelEditor_.texDragging = true
+                            levelEditor_.texDragType = "move"
+                            levelEditor_.texDragStartX = mx
+                            levelEditor_.texDragStartY = my
+                            levelEditor_.texDragStartOffX = tLayer.offsetX or 0
+                            levelEditor_.texDragStartOffY = tLayer.offsetY or 0
+                            levelEditor_.texDragObjPW = pw
+                            levelEditor_.texDragObjPH = ph
+                            M.PushUndoState()
+                        end
+                    end
                 elseif obj.texture and obj.texture ~= "" then
                     -- 兼容旧单贴图模式（右下角缩放）
                     local tScW = obj.texScaleW or 1.0
@@ -1139,7 +1206,11 @@ function M.UpdateLevelEditor(dt)
                 if obj.texLayers and #obj.texLayers > 0 and obj.selectedTexLayer then
                     tLayer = obj.texLayers[obj.selectedTexLayer]
                 end
-                if tLayer and dragType ~= "scale" then
+                if tLayer and dragType == "move" then
+                    -- 中心拖拽：更新 offsetX/offsetY（物件尺寸百分比，X右正 Y上正）
+                    tLayer.offsetX = levelEditor_.texDragStartOffX + dx / math.max(pw, 10)
+                    tLayer.offsetY = levelEditor_.texDragStartOffY - dy / math.max(ph, 10)
+                elseif tLayer and dragType ~= "scale" then
                     -- 四角拖拽：根据角的方向计算缩放变化
                     local dw, dh = 0, 0
                     if dragType == "br" then
@@ -1717,7 +1788,7 @@ function M.ExportLevelTerrainData(silent)
         if obj.texLayers and #obj.texLayers > 0 then
             o.texLayers = {}
             for _, layer in ipairs(obj.texLayers) do
-                table.insert(o.texLayers, {
+                local layerData = {
                     path = layer.path,
                     name = layer.name,
                     opacity = layer.opacity,
@@ -1726,7 +1797,19 @@ function M.ExportLevelTerrainData(silent)
                     rotation = layer.rotation or 0,
                     visible = layer.visible,
                     lockAspect = layer.lockAspect or false,
-                })
+                    offsetX = layer.offsetX or 0,
+                    offsetY = layer.offsetY or 0,
+                }
+                -- 图层独立动态效果
+                if layer.effects and #layer.effects > 0 then
+                    layerData.effects = {}
+                    for _, eff in ipairs(layer.effects) do
+                        local p = {}
+                        if eff.params then for k, v in pairs(eff.params) do p[k] = v end end
+                        table.insert(layerData.effects, { id = eff.id, params = p })
+                    end
+                end
+                table.insert(o.texLayers, layerData)
             end
         end
         -- 触发器专有字段
@@ -1961,7 +2044,8 @@ function M.ExportLevelTerrainData(silent)
                         justifyContent = "center", alignItems = "center",
                         fontColor = {255,255,255,255},
                         onClick = function()
-                            ui:SetClipboardText(exportJson)
+                            ui.useSystemClipboard = true
+                            ui.clipboardText = exportJson
                             local btn = levelEditor_.uiRoot:FindById("export_copy_btn")
                             if btn then btn:SetText("已复制!") end
                         end,
@@ -2078,7 +2162,7 @@ function M.ImportLevelData(filePath)
             if o.texLayers and #o.texLayers > 0 then
                 obj.texLayers = {}
                 for _, tl in ipairs(o.texLayers) do
-                    table.insert(obj.texLayers, {
+                    local layerObj = {
                         path = tl.path,
                         name = tl.name,
                         opacity = tl.opacity or 1.0,
@@ -2087,7 +2171,17 @@ function M.ImportLevelData(filePath)
                         rotation = tl.rotation or 0,
                         visible = tl.visible ~= false,
                         lockAspect = tl.lockAspect or false,
-                    })
+                        offsetX = tl.offsetX or 0,
+                        offsetY = tl.offsetY or 0,
+                    }
+                    -- 图层独立动态效果
+                    if tl.effects and #tl.effects > 0 then
+                        layerObj.effects = {}
+                        for _, eff in ipairs(tl.effects) do
+                            table.insert(layerObj.effects, { id = eff.id, params = eff.params or {} })
+                        end
+                    end
+                    table.insert(obj.texLayers, layerObj)
                 end
             end
             -- 触发器字段
