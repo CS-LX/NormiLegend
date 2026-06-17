@@ -1,0 +1,40 @@
+char_icon.png
+size: 3030, 634
+format: RGBA8888
+filter: Linear, Linear
+repeat: none
+guangyi
+  rotate: false
+  xy: 0, 0
+  size: 606, 634
+  orig: 606, 634
+  offset: 0, 0
+  index: -1
+body
+  rotate: false
+  xy: 606, 0
+  size: 606, 634
+  orig: 606, 634
+  offset: 0, 0
+  index: -1
+fasi
+  rotate: false
+  xy: 1212, 0
+  size: 606, 634
+  orig: 606, 634
+  offset: 0, 0
+  index: -1
+fawei
+  rotate: false
+  xy: 1818, 0
+  size: 606, 634
+  orig: 606, 634
+  offset: 0, 0
+  index: -1
+sidai
+  rotate: false
+  xy: 2424, 0
+  size: 606, 634
+  orig: 606, 634
+  offset: 0, 0
+  index: -1

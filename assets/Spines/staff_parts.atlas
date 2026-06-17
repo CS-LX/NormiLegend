@@ -1,0 +1,40 @@
+staff_parts.png
+size: 1536, 1364
+format: RGBA8888
+filter: Linear, Linear
+repeat: none
+wing
+  rotate: false
+  xy: 1189, 2
+  size: 178, 269
+  orig: 178, 269
+  offset: 0, 0
+  index: -1
+frag1
+  rotate: false
+  xy: 203, 1180
+  size: 212, 146
+  orig: 212, 146
+  offset: 0, 0
+  index: -1
+frag2
+  rotate: false
+  xy: 417, 1180
+  size: 276, 102
+  orig: 276, 102
+  offset: 0, 0
+  index: -1
+frag3
+  rotate: false
+  xy: 2, 1180
+  size: 199, 181
+  orig: 199, 181
+  offset: 0, 0
+  index: -1
+staff_body
+  rotate: false
+  xy: 2, 2
+  size: 1185, 1176
+  orig: 1185, 1176
+  offset: 0, 0
+  index: -1

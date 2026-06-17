@@ -11,7 +11,6 @@ local EditorState = require("editor.EditorState")
 require("effects.builtin")  -- 注册内置效果
 local EffectRegistry = require("effects.EffectRegistry")
 local DialogManager = require("dialog.DialogManager")
-local DialogRenderer = require("dialog.DialogRenderer")
 
 local P = {}
 local levelEditor_ = EditorState.state
@@ -847,13 +846,15 @@ function P.UpdatePreview(dt)
     end
 
     -- 对话框点击拦截（优先于攻击等其他输入）
+    local clickConsumed = false
     if input:GetMouseButtonPress(MOUSEB_LEFT) and DialogManager.HandleClick() then
-        -- 点击被对话框消费，不继续传递
+        -- 点击被对话框消费，本帧不再触发攻击（防止关闭对话的那一击同帧放招）
+        clickConsumed = true
     end
 
     -- 攻击（J键 / 鼠标左键）- 通过 Combat.CastSpell 触发投射物/近战
     -- 角色3没有攻击动作，跳过
-    local attackPressed = input:GetKeyPress(KEY_J) or (input:GetMouseButtonPress(MOUSEB_LEFT) and not DialogManager.IsBlocking())
+    local attackPressed = input:GetKeyPress(KEY_J) or (input:GetMouseButtonPress(MOUSEB_LEFT) and not DialogManager.IsBlocking() and not clickConsumed)
     if S.currentCharacter ~= 3 and attackPressed and not S.isBlocking and not S.isCharging and not S.chargeReleased and not S.isAttacking then
         Combat.CastSpell()
     end
@@ -2098,8 +2099,7 @@ function P.DrawPreview(vg, physW, physH)
         end
     end
 
-    -- 对话框渲染（HUD最顶层）
-    DialogRenderer.Draw(vg, physW, physH)
+    -- 对话框渲染已迁移至 DialogView（urhox-libs/UI overlay，自动渲染于最上层）
 end
 
 -- ============================================================================

@@ -5,6 +5,7 @@
 -- ============================================================================
 
 local DialogConfig = require("dialog.DialogConfig")
+local DialogView = require("dialog.DialogView")
 
 local M = {}
 
@@ -27,6 +28,8 @@ function M.Show(nodeData, onDismiss)
         elapsed = 0,
         onDismiss = onDismiss,
     }
+    -- 构建并挂载 UI 视图（最上层 overlay）
+    DialogView.Show(config)
     print("[DIALOG] Show: " .. (config.nameplateText or "") .. " - " .. (config.dialogText or ""))
 end
 
@@ -36,6 +39,8 @@ function M.Update(dt)
     if not M.active then return end
     local a = M.active
     a.elapsed = a.elapsed + dt
+    -- 驱动 UI 视图（文本动画 / effects / 提示闪烁）
+    DialogView.Update(dt, a.config, a.elapsed)
     if a.config.durationMode == "timed" then
         if a.elapsed >= a.config.duration then
             M.Dismiss()
@@ -57,6 +62,7 @@ function M.Dismiss()
     if not M.active then return end
     local cb = M.active.onDismiss
     M.active = nil
+    DialogView.Hide()  -- 卸载并销毁 UI 视图
     print("[DIALOG] Dismiss")
     if cb then cb() end
 end
@@ -70,6 +76,7 @@ end
 --- 重置（预览开始/结束时调用）
 function M.Reset()
     M.active = nil
+    DialogView.Hide()  -- 确保 UI 视图被清理
 end
 
 return M

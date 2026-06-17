@@ -1,0 +1,110 @@
+char_parts.png
+size: 1024, 556
+format: RGBA8888
+filter: Linear, Linear
+repeat: none
+hair_ahoge
+  rotate: false
+  xy: 529, 372
+  size: 78, 99
+  orig: 78, 99
+  offset: 0, 0
+  index: -1
+hair_bangs
+  rotate: false
+  xy: 719, 2
+  size: 170, 140
+  orig: 170, 140
+  offset: 0, 0
+  index: -1
+hair_top
+  rotate: false
+  xy: 2, 372
+  size: 257, 124
+  orig: 257, 124
+  offset: 0, 0
+  index: -1
+hair_bun
+  rotate: false
+  xy: 891, 2
+  size: 101, 130
+  orig: 101, 130
+  offset: 0, 0
+  index: -1
+hair_left
+  rotate: false
+  xy: 398, 372
+  size: 129, 112
+  orig: 129, 112
+  offset: 0, 0
+  index: -1
+hair_left_braid
+  rotate: false
+  xy: 387, 2
+  size: 127, 160
+  orig: 127, 160
+  offset: 0, 0
+  index: -1
+hair_right
+  rotate: false
+  xy: 2, 2
+  size: 92, 368
+  orig: 92, 368
+  offset: 0, 0
+  index: -1
+head
+  rotate: false
+  xy: 96, 2
+  size: 216, 269
+  orig: 216, 269
+  offset: 0, 0
+  index: -1
+neck_collar
+  rotate: false
+  xy: 2, 498
+  size: 140, 56
+  orig: 140, 56
+  offset: 0, 0
+  index: -1
+arm_l
+  rotate: false
+  xy: 314, 2
+  size: 71, 175
+  orig: 71, 175
+  offset: 0, 0
+  index: -1
+arm_r
+  rotate: false
+  xy: 516, 2
+  size: 45, 154
+  orig: 45, 154
+  offset: 0, 0
+  index: -1
+torso
+  rotate: false
+  xy: 563, 2
+  size: 154, 150
+  orig: 154, 150
+  offset: 0, 0
+  index: -1
+skirt
+  rotate: false
+  xy: 609, 372
+  size: 213, 96
+  orig: 213, 96
+  offset: 0, 0
+  index: -1
+legs
+  rotate: false
+  xy: 261, 372
+  size: 135, 120
+  orig: 135, 120
+  offset: 0, 0
+  index: -1
+shoes
+  rotate: false
+  xy: 824, 372
+  size: 143, 87
+  orig: 143, 87
+  offset: 0, 0
+  index: -1

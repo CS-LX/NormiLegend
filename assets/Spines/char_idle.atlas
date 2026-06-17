@@ -1,0 +1,12 @@
+char_idle.png
+size: 389, 835
+format: RGBA8888
+filter: Linear, Linear
+repeat: none
+char_idle
+  rotate: false
+  xy: 0, 0
+  size: 389, 835
+  orig: 389, 835
+  offset: 0, 0
+  index: -1

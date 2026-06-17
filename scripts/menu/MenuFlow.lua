@@ -33,6 +33,8 @@ local mainMenuTime_ = 0
 local layerEditorData_ = nil
 local uiLayerEditorData_ = nil
 local uiImageLayers_ = nil
+local staffHover_ = false       -- 鼠标是否悬停在任务区域
+local staffPhase_ = "collapsed" -- 法杖动画状态机: collapsed(收起) / opening(展开中) / looping(展开后呼吸循环) / closing(收回中)
 local menuPanelOverlay_ = nil
 local layerEditorVisible_ = false
 local layerEditorPanel_ = nil
@@ -308,16 +310,17 @@ function M.ShowMainMenu()
 
     -- 定义UI图片数据（按图层从下到上排列）
     -- 每项: { name=显示名, id=唯一id, file=图片路径, w=原始宽, h=原始高, top=初始top(px), left=初始left(px) }
-    ---@type {name:string, id:string, file:string, w:number, h:number, top:number, left:number}[]
+    --   type 可选: "image"(默认,图片) | "spine"(Spine动画, 用 src/animation 字段)
+    ---@type {name:string, id:string, file:string?, w:number, h:number, top:number, left:number, type:string?, src:string?, animation:string?, rotation:number?, opacity:number?, visible:boolean?}[]
     uiImageLayers_ = {
         -- 第1层: 背景
         { name = "任务背景",   id = "ui_任务背景",   file = "image/主界面ui/任务背景.png",   w = 433, h = 656, top = 95, left = 1040 },
         { name = "探索背景",   id = "ui_探索背景",   file = "image/主界面ui/探索背景.png",   w = 234, h = 747, top = 100, left = 1610 },
         { name = "角色背景",   id = "ui_角色背景",   file = "image/主界面ui/角色背景.png",   w = 180, h = 643, top = 110, left = 1405 },
-        -- 第2层: 图标
-        { name = "任务图标",   id = "ui_任务图标",   file = "image/主界面ui/任务图标.png",   w = 171, h = 623, top = 110, left = 1205 },
+        -- 第2层: 图标（原"任务图标"已移除，由法杖动画占据其层序位置）
+        { name = "法杖动画",   id = "ui_法杖动画",   type = "spine", src = "Spines/staff_parts.json", animation = "open",   w = 490, h = 550, top = 125, left = 1045, rotation = 60, opacity = 1.0, visible = true },
         { name = "探索图标",   id = "ui_探索图标",   file = "image/主界面ui/探索图标.png",   w = 280, h = 466, top = 380, left = 1600 },
-        { name = "角色图标",   id = "ui_角色图标",   file = "image/主界面ui/角色图标.png",   w = 245, h = 221, top = 115, left = 1375 },
+        { name = "角色图标",   id = "ui_角色图标",   type = "spine", src = "Spines/char_icon.json", animation = "idle",   w = 350, h = 366, top = 44, left = 1322, opacity = 1.0, visible = true },
         -- 第3层: 高亮（探索高亮、角色高亮）
         { name = "探索高亮",   id = "ui_探索高亮",   file = "image/主界面ui/探索高亮.png",   w = 263, h = 388, top = 460, left = 1600 },
         { name = "角色高亮",   id = "ui_角色高亮",   file = "image/主界面ui/角色高亮.png",   w = 210, h = 564, top = 115, left = 1380 },
@@ -333,19 +336,13 @@ function M.ShowMainMenu()
 
     -- 创建所有UI图片图层
     for _, layer in ipairs(uiImageLayers_) do
-        local isTextLayer = layer.id:find("文字") ~= nil
-        local panel = UI.Panel {
-            id = layer.id,
-            position = "absolute",
-            top = layer.top, left = layer.left,
-            width = layer.w, height = layer.h,
-            backgroundImage = layer.file,
-            backgroundFit = "contain",
-            pointerEvents = "none",
-            transition = isTextLayer and "all 0.25s easeOut" or nil,
-        }
-        uiLayerContainer:AddChild(panel)
+        uiLayerContainer:AddChild(M.CreateLayerWidget(layer))
     end
+
+    -- 法杖动画：初始暂停在收起状态（第0帧=碎片收回中心），仅 hover 任务图标时播放
+    M.SetupStaffSpine(uiLayerContainer)
+    -- 角色图标动画：初始静止在第0帧，仅 hover 角色区域时播放
+    M.SetupCharIconSpine(uiLayerContainer)
 
     -- 右侧三个功能区域的点击热区（任务/角色/探索）
     local menuPanel = UI.Panel {
@@ -365,10 +362,26 @@ function M.ShowMainMenu()
                 onPointerEnter = function()
                     local w = uiLayerContainer:FindById("ui_任务文字")
                     if w then w:SetStyle({ scale = 1.08 }) end
+                    -- 法杖动画：开始展开（播完停在完全展开状态）
+                    staffHover_ = true
+                    local sp = uiLayerContainer:FindById("ui_法杖动画")
+                    if sp and (staffPhase_ == "collapsed" or staffPhase_ == "closing") then
+                        sp:SetSpeed(1); sp:SetAnimation(0, "open", false)
+                        staffPhase_ = "opening"
+                    end
+                    -- opening / open 状态：继续展开 / 保持展开，无需操作
                 end,
                 onPointerLeave = function()
                     local w = uiLayerContainer:FindById("ui_任务文字")
                     if w then w:SetStyle({ scale = 1.0 }) end
+                    -- 法杖动画：收回碎片
+                    staffHover_ = false
+                    local sp = uiLayerContainer:FindById("ui_法杖动画")
+                    if sp and staffPhase_ == "looping" then
+                        sp:SetSpeed(1); sp:SetAnimation(0, "close", false)
+                        staffPhase_ = "closing"
+                    end
+                    -- opening 状态：等 open 播完，监听器会因 staffHover_=false 自动收回
                 end,
             },
             -- 角色热区（中间卡片）
@@ -381,10 +394,16 @@ function M.ShowMainMenu()
                 onPointerEnter = function()
                     local w = uiLayerContainer:FindById("ui_角色文字")
                     if w then w:SetStyle({ scale = 1.08 }) end
+                    -- 角色图标动画：开始播放（头发飘动 + 光翼旋转）
+                    local sp = uiLayerContainer:FindById("ui_角色图标")
+                    if sp then sp:SetSpeed(1) end
                 end,
                 onPointerLeave = function()
                     local w = uiLayerContainer:FindById("ui_角色文字")
                     if w then w:SetStyle({ scale = 1.0 }) end
+                    -- 角色图标动画：停止播放（暂停在当前帧）
+                    local sp = uiLayerContainer:FindById("ui_角色图标")
+                    if sp then sp:SetSpeed(0) end
                 end,
             },
             -- 探索热区（右侧卡片）
@@ -469,11 +488,19 @@ function M.ShowMainMenu()
         { name = "紫藤花",  id = "l2d_wisteria",  top = 0, left = -10, unit = "px" },
         { name = "钢琴",    id = "l2d_piano",     top = -32, left = -58, unit = "px" },
     }
-    -- UI图片图层数据（像素单位，支持上下移动图层顺序）
-    ---@type {name:string, id:string, top:number, left:number, unit:string}[]
+    -- UI图片图层数据（像素单位，支持上下移动图层顺序 + 大小/角度/透明度/隐藏）
+    ---@type {name:string, id:string, top:number, left:number, w:number, h:number, rotation:number, opacity:number, visible:boolean, unit:string}[]
     uiLayerEditorData_ = {}
     for _, layer in ipairs(uiImageLayers_) do
-        table.insert(uiLayerEditorData_, { name = layer.name, id = layer.id, top = layer.top, left = layer.left, unit = "px" })
+        table.insert(uiLayerEditorData_, {
+            name = layer.name, id = layer.id,
+            top = layer.top, left = layer.left,
+            w = layer.w, h = layer.h,
+            rotation = layer.rotation or 0,
+            opacity = layer.opacity or 1.0,
+            visible = (layer.visible ~= false),
+            unit = "px",
+        })
     end
 
     layerEditorVisible_ = false
@@ -1022,31 +1049,25 @@ function M.UpdateMainMenuAnimation(dt)
     local PX = 19.2   -- 1% 水平 = 19.2px
     local PY = 10.8   -- 1% 垂直 = 10.8px
 
-    -- 背景层视差（减弱）
-    local bgOx = -nx * 1
-    local bgOy = -ny * 1.5
+    -- 背景层：静止（已去除鼠标视差）
     S.mainMenuUIRoot.layerBg:SetStyle({
-        top = edBg.top + bgOy * 0.06 * PY,
-        left = edBg.left + bgOx * 0.06 * PX,
+        top = edBg.top,
+        left = edBg.left,
     })
 
-    -- 人物层：呼吸+微晃头（视差减弱）
+    -- 人物层：呼吸+微晃头（已去除鼠标视差）
     local charBreath = math.sin(t * 1.2) * 0.15
     local charHeadSway = math.sin(t * 0.4) * 0.2
-    local charParX = -nx * 0.8
-    local charParY = -ny * 0.4
     S.mainMenuUIRoot.layerChar:SetStyle({
-        top = edChar.top + (charBreath * 0.15 + charParY * 0.02) * PY,
-        left = edChar.left + (charHeadSway * 0.1 + charParX * 0.02) * PX,
+        top = edChar.top + (charBreath * 0.15) * PY,
+        left = edChar.left + (charHeadSway * 0.1) * PX,
     })
 
-    -- 帘子层：轻微摆动（视差减弱）
+    -- 帘子层：轻微摆动（已去除鼠标视差）
     local curtainSway = math.sin(t * 0.8) * 0.4 + math.sin(t * 1.3) * 0.2
-    local curtainParX = -nx * 1
-    local curtainParY = -ny * 0.4
     S.mainMenuUIRoot.layerCurtain:SetStyle({
-        top = edCurt.top + (math.sin(t * 0.6) * 0.2 + curtainParY * 0.02) * PY,
-        left = edCurt.left + (curtainSway * 0.25 + curtainParX * 0.02) * PX,
+        top = edCurt.top + (math.sin(t * 0.6) * 0.2) * PY,
+        left = edCurt.left + (curtainSway * 0.25) * PX,
     })
 
     -- 风铃层：随风摆动（纵向视差增强）
@@ -1067,12 +1088,10 @@ function M.UpdateMainMenuAnimation(dt)
         left = edWist.left + (wistSway * 0.4 + wistParX * 0.05) * PX,
     })
 
-    -- 钢琴层：前景（视差减弱）
-    local pianoParX = -nx * 0.8
-    local pianoParY = -ny * 0.3
+    -- 钢琴层：前景（已去除鼠标视差，静止）
     S.mainMenuUIRoot.layerPiano:SetStyle({
-        top = edPiano.top + pianoParY * 0.02 * PY,
-        left = edPiano.left + pianoParX * 0.02 * PX,
+        top = edPiano.top,
+        left = edPiano.left,
     })
 
 
@@ -1103,8 +1122,9 @@ function M.UpdateMainMenuAnimation(dt)
     if S.mainMenuUIRoot.uiLayerContainer and uiImageLayers_ and uiLayerEditorData_ then
         local layerCount = #uiImageLayers_
         for idx, layer in ipairs(uiImageLayers_) do
+            local ed0 = uiLayerEditorData_[idx]
             local widget = S.mainMenuUIRoot.uiLayerContainer:FindById(layer.id)
-            if widget then
+            if widget and not (ed0 and ed0.visible == false) then
                 -- 深度因子：底层(idx=1)=0.2, 顶层(idx=max)=1.0
                 -- 总体高亮与背景层一致（固定最小深度）
                 local depth
@@ -1269,80 +1289,186 @@ function M.CreateBgLayerRow(i, layer)
     return row
 end
 
---- 创建UI图片图层编辑行（像素单位 + 图层上下移动）
-function M.CreateUILayerRow(i, layer)
-    local row = UI.Panel {
-        flexDirection = "row", alignItems = "center", gap = 2, width = "100%",
+--- 创建单个图层的渲染控件（图片用 Panel，Spine 用 UI.Spine）
+---@param layer table uiImageLayers_ 中的一项
+function M.CreateLayerWidget(layer)
+    if layer.type == "spine" then
+        return UI.Spine {
+            id = layer.id,
+            position = "absolute",
+            top = layer.top, left = layer.left,
+            width = layer.w, height = layer.h,
+            rotate = layer.rotation or 0,
+            opacity = layer.opacity or 1.0,
+            src = layer.src,
+            animation = layer.animation or "deploy",
+            loop = true, pma = false,
+            objectFit = "contain",
+            pointerEvents = "none",
+        }
+    end
+    local isTextLayer = layer.id:find("文字") ~= nil
+    return UI.Panel {
+        id = layer.id,
+        position = "absolute",
+        top = layer.top, left = layer.left,
+        width = layer.w, height = layer.h,
+        rotate = layer.rotation or 0,
+        opacity = layer.opacity or 1.0,
+        backgroundImage = layer.file,
+        backgroundFit = "contain",
+        pointerEvents = "none",
+        transition = isTextLayer and "all 0.25s easeOut" or nil,
     }
-    -- 图层名称
-    row:AddChild(UI.Label { text = layer.name, fontSize = 10, fontColor = {255,220,180,255}, width = 52 })
-    -- top 控制
-    row:AddChild(UI.Label { text = "T:", fontSize = 9, fontColor = {150,150,150,255}, width = 12 })
-    row:AddChild(UI.Button {
-        text = "-", fontSize = 11, width = 18, height = 18,
-        backgroundColor = {80,80,120,200}, borderRadius = 2,
+end
+
+--- 初始化法杖 Spine 动画：open → loop → close 三段式状态机
+--- hover 任务区域 → 播 open（碎片从中心展开）→ 播完循环 loop（碎片+光翼轻微呼吸浮动）
+--- 移开鼠标 → 播 close（碎片收回中心），播完停在收起状态
+---@param container table uiLayerContainer
+function M.SetupStaffSpine(container)
+    local sp = container and container:FindById("ui_法杖动画")
+    if not sp then return end
+    staffHover_ = false
+    staffPhase_ = "collapsed"
+    -- 动画切换混合，快速来回 hover 时平滑过渡
+    sp:SetMix("open", "loop", 0.20)
+    sp:SetMix("loop", "close", 0.20)
+    sp:SetMix("open", "close", 0.12)
+    sp:SetMix("close", "open", 0.12)
+    -- 初始停在收起状态：open 动画第 0 帧 = 碎片收回中心
+    sp:SetAnimation(0, "open", false)
+    sp:SetSpeed(0)
+    sp:SetCompleteListener(function(_, anim)
+        if anim == "open" then
+            -- 展开完成
+            if staffHover_ then
+                -- 鼠标仍悬停 → 进入呼吸循环
+                sp:SetSpeed(1); sp:SetAnimation(0, "loop", true)
+                staffPhase_ = "looping"
+            else
+                -- 展开刚结束鼠标已移开 → 立即收回
+                sp:SetSpeed(1); sp:SetAnimation(0, "close", false)
+                staffPhase_ = "closing"
+            end
+        elseif anim == "close" then
+            -- 收回完成：回到收起并暂停
+            staffPhase_ = "collapsed"
+            if staffHover_ then
+                -- 收回刚结束鼠标又悬停 → 重新展开
+                sp:SetSpeed(1); sp:SetAnimation(0, "open", false)
+                staffPhase_ = "opening"
+            else
+                sp:SetSpeed(0)
+            end
+        end
+        -- anim == "loop": 持续循环呼吸，由 onPointerLeave 切到 close
+    end)
+end
+
+--- 初始化角色图标 Spine：默认静止（暂停在第0帧的中性姿态），
+--- hover 角色区域时开始播放头发飘动/光翼旋转，移开时停止
+---@param container table uiLayerContainer
+function M.SetupCharIconSpine(container)
+    local sp = container and container:FindById("ui_角色图标")
+    if not sp then return end
+    sp:SetAnimation(0, "idle", true)  -- 循环 idle
+    sp:SetSpeed(0)                    -- 但先静止（暂停在第0帧）
+end
+
+--- 小步进按钮
+local function miniBtn(txt, color, cb)
+    return UI.Button {
+        text = txt, fontSize = 11, width = 18, height = 18,
+        backgroundColor = color, borderRadius = 2,
         justifyContent = "center", alignItems = "center", fontColor = {255,255,255,255},
-        onClick = function()
-            uiLayerEditorData_[i].top = uiLayerEditorData_[i].top - 5
-            M.ApplyUILayerPos(i)
-            M.RefreshLayerEditor()
-        end,
-    })
-    row:AddChild(UI.Label { text = tostring(math.floor(layer.top)), fontSize = 9, fontColor = {255,255,255,255}, width = 28, textAlign = "center" })
-    row:AddChild(UI.Button {
-        text = "+", fontSize = 11, width = 18, height = 18,
-        backgroundColor = {80,80,120,200}, borderRadius = 2,
-        justifyContent = "center", alignItems = "center", fontColor = {255,255,255,255},
-        onClick = function()
-            uiLayerEditorData_[i].top = uiLayerEditorData_[i].top + 5
-            M.ApplyUILayerPos(i)
-            M.RefreshLayerEditor()
-        end,
-    })
-    -- left 控制
-    row:AddChild(UI.Label { text = "L:", fontSize = 9, fontColor = {150,150,150,255}, width = 12 })
-    row:AddChild(UI.Button {
-        text = "-", fontSize = 11, width = 18, height = 18,
-        backgroundColor = {80,120,80,200}, borderRadius = 2,
-        justifyContent = "center", alignItems = "center", fontColor = {255,255,255,255},
-        onClick = function()
-            uiLayerEditorData_[i].left = uiLayerEditorData_[i].left - 5
-            M.ApplyUILayerPos(i)
-            M.RefreshLayerEditor()
-        end,
-    })
-    row:AddChild(UI.Label { text = tostring(math.floor(layer.left)), fontSize = 9, fontColor = {255,255,255,255}, width = 28, textAlign = "center" })
-    row:AddChild(UI.Button {
-        text = "+", fontSize = 11, width = 18, height = 18,
-        backgroundColor = {80,120,80,200}, borderRadius = 2,
-        justifyContent = "center", alignItems = "center", fontColor = {255,255,255,255},
-        onClick = function()
-            uiLayerEditorData_[i].left = uiLayerEditorData_[i].left + 5
-            M.ApplyUILayerPos(i)
-            M.RefreshLayerEditor()
-        end,
-    })
-    -- 图层上移按钮
-    row:AddChild(UI.Button {
-        text = "▲", fontSize = 9, width = 20, height = 18,
-        backgroundColor = (i > 1) and {120,80,150,200} or {60,60,60,100}, borderRadius = 2,
-        justifyContent = "center", alignItems = "center",
-        fontColor = (i > 1) and {255,255,255,255} or {100,100,100,255},
-        onClick = function()
-            if i > 1 then M.MoveUILayer(i, -1) end
-        end,
-    })
-    -- 图层下移按钮
-    row:AddChild(UI.Button {
-        text = "▼", fontSize = 9, width = 20, height = 18,
-        backgroundColor = (i < #uiLayerEditorData_) and {120,80,150,200} or {60,60,60,100}, borderRadius = 2,
-        justifyContent = "center", alignItems = "center",
-        fontColor = (i < #uiLayerEditorData_) and {255,255,255,255} or {100,100,100,255},
-        onClick = function()
-            if i < #uiLayerEditorData_ then M.MoveUILayer(i, 1) end
-        end,
-    })
-    return row
+        onClick = cb,
+    }
+end
+
+--- 一组 "标签 [-] 值 [+]"
+local function stepGroup(label, valText, color, onMinus, onPlus)
+    return UI.Panel {
+        flexDirection = "row", alignItems = "center", gap = 2, marginRight = 8,
+        children = {
+            UI.Label { text = label, fontSize = 9, fontColor = {150,150,150,255}, width = 16 },
+            miniBtn("-", color, onMinus),
+            UI.Label { text = valText, fontSize = 9, fontColor = {255,255,255,255}, width = 30, textAlign = "center" },
+            miniBtn("+", color, onPlus),
+        },
+    }
+end
+
+--- 创建UI图片图层编辑行（位置/大小/角度/透明度/隐藏/层序）
+function M.CreateUILayerRow(i, layer)
+    local PURPLE, GREEN, BLUE, ORANGE, VIOLET = {80,80,120,200}, {80,120,80,200}, {70,90,150,200}, {150,110,70,200}, {110,90,140,200}
+    local function apply() M.ApplyUILayerPos(i); M.RefreshLayerEditor() end
+    local vis = (layer.visible ~= false)
+
+    -- 行1：隐藏开关 + 名称 + 上/下移
+    local row1 = UI.Panel { flexDirection = "row", alignItems = "center", gap = 4, width = "100%",
+        children = {
+            UI.Button {
+                text = vis and "●" or "○", fontSize = 12, width = 24, height = 20,
+                backgroundColor = vis and {60,140,90,220} or {90,60,60,220}, borderRadius = 3,
+                justifyContent = "center", alignItems = "center", fontColor = {255,255,255,255},
+                onClick = function()
+                    uiLayerEditorData_[i].visible = not (uiLayerEditorData_[i].visible ~= false)
+                    apply()
+                end,
+            },
+            UI.Label { text = layer.name, fontSize = 10, fontColor = {255,220,180,255}, flexGrow = 1 },
+            UI.Button {
+                text = "▲", fontSize = 9, width = 20, height = 18,
+                backgroundColor = (i > 1) and {120,80,150,200} or {60,60,60,100}, borderRadius = 2,
+                justifyContent = "center", alignItems = "center",
+                fontColor = (i > 1) and {255,255,255,255} or {100,100,100,255},
+                onClick = function() if i > 1 then M.MoveUILayer(i, -1) end end,
+            },
+            UI.Button {
+                text = "▼", fontSize = 9, width = 20, height = 18,
+                backgroundColor = (i < #uiLayerEditorData_) and {120,80,150,200} or {60,60,60,100}, borderRadius = 2,
+                justifyContent = "center", alignItems = "center",
+                fontColor = (i < #uiLayerEditorData_) and {255,255,255,255} or {100,100,100,255},
+                onClick = function() if i < #uiLayerEditorData_ then M.MoveUILayer(i, 1) end end,
+            },
+        } }
+
+    -- 行2：位置 T / L
+    local row2 = UI.Panel { flexDirection = "row", alignItems = "center", width = "100%", marginTop = 2,
+        children = {
+            stepGroup("T", tostring(math.floor(layer.top)), PURPLE,
+                function() uiLayerEditorData_[i].top = uiLayerEditorData_[i].top - 5; apply() end,
+                function() uiLayerEditorData_[i].top = uiLayerEditorData_[i].top + 5; apply() end),
+            stepGroup("L", tostring(math.floor(layer.left)), GREEN,
+                function() uiLayerEditorData_[i].left = uiLayerEditorData_[i].left - 5; apply() end,
+                function() uiLayerEditorData_[i].left = uiLayerEditorData_[i].left + 5; apply() end),
+        } }
+
+    -- 行3：大小 W / H
+    local row3 = UI.Panel { flexDirection = "row", alignItems = "center", width = "100%", marginTop = 2,
+        children = {
+            stepGroup("W", tostring(math.floor(layer.w)), BLUE,
+                function() uiLayerEditorData_[i].w = math.max(10, uiLayerEditorData_[i].w - 10); apply() end,
+                function() uiLayerEditorData_[i].w = uiLayerEditorData_[i].w + 10; apply() end),
+            stepGroup("H", tostring(math.floor(layer.h)), BLUE,
+                function() uiLayerEditorData_[i].h = math.max(10, uiLayerEditorData_[i].h - 10); apply() end,
+                function() uiLayerEditorData_[i].h = uiLayerEditorData_[i].h + 10; apply() end),
+        } }
+
+    -- 行4：角度 R / 透明度 α
+    local row4 = UI.Panel { flexDirection = "row", alignItems = "center", width = "100%", marginTop = 2,
+        children = {
+            stepGroup("R", tostring(math.floor(layer.rotation or 0)) .. "°", ORANGE,
+                function() uiLayerEditorData_[i].rotation = (uiLayerEditorData_[i].rotation or 0) - 5; apply() end,
+                function() uiLayerEditorData_[i].rotation = (uiLayerEditorData_[i].rotation or 0) + 5; apply() end),
+            stepGroup("α", string.format("%.1f", layer.opacity or 1), VIOLET,
+                function() uiLayerEditorData_[i].opacity = math.max(0, (uiLayerEditorData_[i].opacity or 1) - 0.1); apply() end,
+                function() uiLayerEditorData_[i].opacity = math.min(1, (uiLayerEditorData_[i].opacity or 1) + 0.1); apply() end),
+        } }
+
+    return UI.Panel { flexDirection = "column", width = "100%", marginBottom = 5, paddingBottom = 4,
+        children = { row1, row2, row3, row4 } }
 end
 
 --- 应用背景图层位置（像素）
@@ -1358,13 +1484,20 @@ function M.ApplyBgLayerPos(idx)
     end
 end
 
---- 应用UI图片图层位置（像素）
+--- 应用UI图片图层全部属性（位置/大小/角度/透明度/隐藏）
 function M.ApplyUILayerPos(idx)
     if not S.mainMenuUIRoot or not S.mainMenuUIRoot.uiLayerContainer then return end
     local layer = uiLayerEditorData_[idx]
     local widget = S.mainMenuUIRoot.uiLayerContainer:FindById(layer.id)
     if widget then
-        widget:SetStyle({ top = layer.top, left = layer.left })
+        local hidden = (layer.visible == false)
+        widget:SetStyle({
+            top = layer.top, left = layer.left,
+            width = layer.w, height = layer.h,
+            rotate = layer.rotation or 0,
+            opacity = layer.opacity or 1.0,
+            display = hidden and "none" or "flex",
+        })
     end
 end
 
@@ -1391,24 +1524,14 @@ function M.RebuildUILayerContainer()
     container:ClearChildren()
 
     for _, layer in ipairs(uiImageLayers_) do
-        local panel = UI.Panel {
-            id = layer.id,
-            position = "absolute",
-            top = layer.top, left = layer.left,
-            width = layer.w, height = layer.h,
-            backgroundImage = layer.file,
-            backgroundFit = "contain",
-            pointerEvents = "none",
-        }
-        container:AddChild(panel)
+        container:AddChild(M.CreateLayerWidget(layer))
     end
-    -- 同步编辑器数据中的位置到新面板
-    for i, ed in ipairs(uiLayerEditorData_) do
-        local widget = container:FindById(ed.id)
-        if widget then
-            widget:SetStyle({ top = ed.top, left = ed.left })
-        end
+    -- 同步编辑器数据中的全部属性到新控件
+    for i in ipairs(uiLayerEditorData_) do
+        M.ApplyUILayerPos(i)
     end
+    -- 重排后重新初始化法杖动画（控件被重建）
+    M.SetupStaffSpine(container)
 end
 
 function M.ShowLayerEditorExport()
@@ -1419,7 +1542,11 @@ function M.ShowLayerEditorExport()
     table.insert(lines, "")
     table.insert(lines, "-- UI图片图层（从下到上）--")
     for i, layer in ipairs(uiLayerEditorData_) do
-        table.insert(lines, i .. ". " .. layer.name .. ": top=" .. tostring(math.floor(layer.top)) .. "px, left=" .. tostring(math.floor(layer.left)) .. "px")
+        table.insert(lines, string.format(
+            "%d. %s: top=%dpx, left=%dpx, w=%d, h=%d, rot=%d°, alpha=%.1f, %s",
+            i, layer.name, math.floor(layer.top), math.floor(layer.left),
+            math.floor(layer.w), math.floor(layer.h), math.floor(layer.rotation or 0),
+            layer.opacity or 1.0, (layer.visible == false) and "隐藏" or "显示"))
     end
     local exportText = table.concat(lines, "\n")
 
