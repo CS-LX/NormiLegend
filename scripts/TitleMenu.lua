@@ -368,6 +368,26 @@ function M.EnterLevelEditor(chapterIdx, levelIdx)
         end
         M.ImportTexture("image/地图素材/" .. name .. ".png", displayName, cat)
     end
+    -- 标志素材
+    local signAssets = { "标志-蓝白分割线", "标志-蓝金分割线", "标志-金分割线", "标志-金蓝分割线", "标志-（竖）金色花纹" }
+    for _, name in ipairs(signAssets) do
+        local displayName = name:sub(#"标志-" + 1)
+        M.ImportTexture("image/地图素材/标志/" .. name .. ".png", displayName, "sign")
+    end
+    -- 对话框素材：立绘
+    local portraitDir = "image/对话框/诺米立绘/"
+    local portraitFiles = { "诺米-傲娇", "诺米-哭", "诺米-嫌弃", "诺米-尴尬", "诺米-张嘴", "诺米-微笑", "诺米-普通", "诺米-生气", "诺米-疑惑", "诺米-自豪", "诺米-闭眼笑", "诺米-震惊" }
+    for _, name in ipairs(portraitFiles) do
+        M.ImportTexture(portraitDir .. name .. ".png", name, "dlg_portrait")
+    end
+    -- 对话框素材：底图
+    M.ImportTexture("image/对话框/底图/诺米对话框-窄.png", "诺米对话框-窄", "dlg_bg")
+    M.ImportTexture("image/对话框/底图/诺米对话框-宽.png", "诺米对话框-宽", "dlg_bg")
+    -- 对话框素材：整体
+    local dlgWholeFiles = { "诺米-常态", "诺米-张嘴", "诺米-疑惑", "诺米-震惊" }
+    for _, name in ipairs(dlgWholeFiles) do
+        M.ImportTexture("image/对话框/整体/" .. name .. ".png", name, "dlg_whole")
+    end
     -- 纯色素材
     M.ImportTexture("image/白色.png", "白色", "solid")
     M.ImportTexture("image/透明.png", "透明", "solid")

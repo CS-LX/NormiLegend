@@ -467,32 +467,10 @@ M.INSPECTOR_FIELDS = {
         { key = "slowDuration", label = "持续时间(秒)", type = "float", min = 0.1, max = 10, step = 0.1, default = 1.0, showWhen = { fxType = "slow_motion" } },
     },
     dialog = {
-        -- 基础内容
-        { key = "dialogText", label = "对话内容", type = "text", default = "你好！" },
-        { key = "dlgSpeaker", label = "说话人名称", type = "text", default = "" },
-        -- 持续时间
+        -- inspector 仅保留持续模式 + 编辑器入口
         { key = "dlgDurationMode", label = "持续模式", type = "select", options = "DIALOG_DURATION_MODES", default = "timed" },
         { key = "dlgDuration", label = "显示时间(秒)", type = "float", min = 0.5, max = 30, step = 0.5, default = 3.0, showWhen = { dlgDurationMode = "timed" } },
-        -- 底图组件
-        { key = "dlgBgTexture", label = "底图贴图", type = "text", default = "" },
-        { key = "dlgBgOffsetX", label = "底图偏X", type = "float", min = -500, max = 500, step = 1, default = 0 },
-        { key = "dlgBgOffsetY", label = "底图偏Y", type = "float", min = -500, max = 500, step = 1, default = -120 },
-        { key = "dlgBgOpacity", label = "底图透明度", type = "float", min = 0, max = 1, step = 0.05, default = 1.0 },
-        -- 立绘组件
-        { key = "dlgPortraitTexture", label = "立绘贴图", type = "text", default = "" },
-        { key = "dlgPortraitOffsetX", label = "立绘偏X", type = "float", min = -500, max = 500, step = 1, default = -200 },
-        { key = "dlgPortraitOffsetY", label = "立绘偏Y", type = "float", min = -500, max = 500, step = 1, default = -180 },
-        { key = "dlgPortraitOpacity", label = "立绘透明度", type = "float", min = 0, max = 1, step = 0.05, default = 1.0 },
-        -- 名牌组件
-        { key = "dlgNameTexture", label = "名牌底图", type = "text", default = "" },
-        { key = "dlgNameOffsetX", label = "名牌偏X", type = "float", min = -500, max = 500, step = 1, default = -100 },
-        { key = "dlgNameOffsetY", label = "名牌偏Y", type = "float", min = -500, max = 500, step = 1, default = -140 },
-        { key = "dlgNameOpacity", label = "名牌透明度", type = "float", min = 0, max = 1, step = 0.05, default = 1.0 },
-        -- 文本框组件
-        { key = "dlgTextTexture", label = "文本底图", type = "text", default = "" },
-        { key = "dlgTextOffsetX", label = "文本偏X", type = "float", min = -500, max = 500, step = 1, default = 0 },
-        { key = "dlgTextOffsetY", label = "文本偏Y", type = "float", min = -500, max = 500, step = 1, default = -70 },
-        { key = "dlgTextOpacity", label = "文本透明度", type = "float", min = 0, max = 1, step = 0.05, default = 1.0 },
+        { key = "_openEditor", label = "编辑对话内容", type = "action_button", action = "open_dialog_editor" },
     },
     damage = {
         { key = "damageAmount", label = "数值", type = "float", min = -100, max = 100, step = 1, default = 10 },
@@ -562,7 +540,7 @@ local NODE_DEFAULTS = {
     move_obj  = { targetObjIdx = 0, pathType = "linear", pathPoints = {}, moveDuration = 1.0, moveEase = "easeOut", moveRoundTrip = false, moveLoop = false, moveRepeatCount = 1, rotationDeg = 0, flipByMoveDir = false, opacityMode = "whole", opacityTarget = 1.0, opacityLayerTargets = {}, opacityDuration = 0.5, teleportX = 0, teleportY = 0, outputNode = nil },
     set_var   = { varName = "custom1", setMode = "set", newValue = nil, outputNode = nil },
     play_fx   = { fxType = "sound", soundFile = "", soundVolume = 1.0, shakeDuration = 0.3, shakeIntensity = 1.0, flashColor = "white", flashDuration = 0.2, floatText = "", floatColor = "white", floatSize = 24, particleDir = "up", particleCount = 10, particleSpeed = 3.0, slowFactor = 0.3, slowDuration = 1.0, outputNode = nil },
-    dialog    = { dialogText = "你好！", dlgSpeaker = "", dlgDurationMode = "timed", dlgDuration = 3.0, dlgBgTexture = "", dlgBgOffsetX = 0, dlgBgOffsetY = -120, dlgBgOpacity = 1.0, dlgPortraitTexture = "", dlgPortraitOffsetX = -200, dlgPortraitOffsetY = -180, dlgPortraitOpacity = 1.0, dlgNameTexture = "", dlgNameOffsetX = -100, dlgNameOffsetY = -140, dlgNameOpacity = 1.0, dlgTextTexture = "", dlgTextOffsetX = 0, dlgTextOffsetY = -70, dlgTextOpacity = 1.0, textInput = nil, outputNode = nil },
+    dialog    = { dialogText = "你好！", dlgSpeaker = "", dlgDurationMode = "click", dlgDuration = 3.0, dlgBgTexture = "", dlgBgOffsetX = -76, dlgBgOffsetY = -333, dlgBgOpacity = 0.95, dlgBgWidth = 1550, dlgBgHeight = 660, dlgPortraitTexture = "", dlgPortraitOffsetX = -500, dlgPortraitOffsetY = -300, dlgPortraitOpacity = 1.0, dlgPortraitWidth = 610, dlgPortraitHeight = 600, dlgNameOffsetX = -100, dlgNameOffsetY = -140, dlgNameOpacity = 1.0, dlgTextOffsetX = -150, dlgTextOffsetY = -209, dlgTextOpacity = 1.0, dlgNameFontSize = 16, dlgNameFontColor = {255,255,255,255}, dlgNameStrokeW = 0, dlgNameStrokeColor = {0,0,0,255}, dlgTextFontSize = 44, dlgTextFontColor = {0,0,0,255}, dlgTextStrokeW = 1.5, dlgTextStrokeColor = {0,0,0,200}, dlgTextAnim = "typewriter", dlgTextAnimSpeed = 3.0, dlgWholeTexture = "", dlgWholeOffsetX = -100, dlgWholeOffsetY = -318, dlgWholeOpacity = 1.0, dlgWholeWidth = 1600, dlgWholeHeight = 1075, textInput = nil, outputNode = nil },
     damage    = { damageAmount = 10, damageIsHeal = false, amount = nil, outputNode = nil },
     win_level = { winType = "win" },
     camera_zoom = { zoomScale = 1.0, zoomUsePan = false, zoomCenterX = 15.0, zoomCenterY = 8.75, zoomDuration = 0.5, zoomEase = "easeOut", zoomAutoRestore = false, zoomHoldDuration = 3.0, zoomRestoreDuration = 0.5, zoomRestoreEase = "easeOut", zoomLevel = nil, outputNode = nil },
@@ -646,9 +624,13 @@ function M.RemoveNode(tree, nodeId)
         flashDuration = true, floatSize = true, particleCount = true,
         particleSpeed = true, slowFactor = true, slowDuration = true,
         dlgDuration = true, dlgBgOffsetX = true, dlgBgOffsetY = true, dlgBgOpacity = true,
+        dlgBgWidth = true, dlgBgHeight = true, dlgPortraitWidth = true, dlgPortraitHeight = true,
         dlgPortraitOffsetX = true, dlgPortraitOffsetY = true, dlgPortraitOpacity = true,
         dlgNameOffsetX = true, dlgNameOffsetY = true, dlgNameOpacity = true,
-        dlgTextOffsetX = true, dlgTextOffsetY = true, dlgTextOpacity = true }
+        dlgTextOffsetX = true, dlgTextOffsetY = true, dlgTextOpacity = true,
+        dlgNameFontSize = true, dlgNameStrokeW = true, dlgTextFontSize = true, dlgTextStrokeW = true,
+        dlgTextAnimSpeed = true, dlgWholeOffsetX = true, dlgWholeOffsetY = true,
+        dlgWholeOpacity = true, dlgWholeWidth = true, dlgWholeHeight = true }
     for _, n in pairs(tree.nodes) do
         for k, v in pairs(n) do
             if type(v) == "number" and v == nodeId and not skipKeys[k] then

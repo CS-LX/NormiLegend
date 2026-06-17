@@ -112,6 +112,12 @@ function M.Open(obj, fieldName, onClose)
 
     if obj[fieldName] and obj[fieldName].rootId then
         state.tree = obj[fieldName]
+        -- 重置 ID 计数器，确保新建节点不会覆盖已有节点
+        local maxId = 0
+        for id, _ in pairs(state.tree.nodes) do
+            if id > maxId then maxId = id end
+        end
+        SN.ResetIdCounter(maxId)
     else
         state.tree = SN.CreateTree()
         obj[fieldName] = state.tree
@@ -464,6 +470,81 @@ function M._createFieldEditor(node, field)
             backgroundColor = {38, 38, 50, 200}, borderRadius = 4,
             paddingVertical = 4, paddingHorizontal = 2,
             children = optChildren,
+        }
+
+    elseif field.type == "tex_select" then
+        -- 贴图素材选择器：从 customTextures 按 cat_filter 过滤
+        local EditorState = require("editor.EditorState")
+        local edState = EditorState.state
+        local texList = edState.customTextures or {}
+        local catFilter = field.cat_filter  -- 如 "dlg_portrait" / "dlg_bg"
+        if catFilter then
+            local filtered = {}
+            for _, ta in ipairs(texList) do
+                if ta.cat == catFilter then table.insert(filtered, ta) end
+            end
+            texList = filtered
+        end
+        local currentVal = node[field.key] or ""
+        local optChildren = {}
+        -- "无" 选项
+        local noneActive = (currentVal == "" or currentVal == nil)
+        table.insert(optChildren, UI.Button {
+            text = "（无）",
+            fontSize = 10, height = 22, width = "100%",
+            backgroundColor = noneActive and {80, 100, 160, 220} or {50, 50, 65, 180},
+            borderRadius = 3,
+            fontColor = noneActive and {255, 240, 150, 255} or {200, 200, 210, 220},
+            paddingLeft = 6, justifyContent = "center",
+            onClick = function()
+                nodeRef[field.key] = ""
+                state.inspectorNodeId = nil
+                M._buildInspector(nodeRef.id)
+            end,
+        })
+        -- 素材列表
+        for _, texAsset in ipairs(texList) do
+            local isActive = (texAsset.path == currentVal)
+            table.insert(optChildren, UI.Button {
+                text = texAsset.name or texAsset.path:match("[^/]+$") or texAsset.path,
+                fontSize = 10, height = 22, width = "100%",
+                backgroundColor = isActive and {80, 100, 160, 220} or {50, 50, 65, 180},
+                borderRadius = 3,
+                fontColor = isActive and {255, 240, 150, 255} or {180, 200, 210, 220},
+                paddingLeft = 6, justifyContent = "center",
+                onClick = function()
+                    nodeRef[field.key] = texAsset.path
+                    state.inspectorNodeId = nil
+                    M._buildInspector(nodeRef.id)
+                end,
+            })
+        end
+        return UI.Panel {
+            width = "100%", flexDirection = "column", gap = 2,
+            maxHeight = 150, overflow = "scroll",
+            backgroundColor = {38, 38, 50, 200}, borderRadius = 4,
+            paddingVertical = 4, paddingHorizontal = 2,
+            children = optChildren,
+        }
+
+    elseif field.type == "action_button" then
+        -- 动作按钮：触发特定编辑器功能
+        return UI.Button {
+            text = field.label or "操作", fontSize = 12,
+            width = "100%", height = 32, marginTop = 4,
+            backgroundColor = {60, 100, 180, 220}, borderRadius = 4,
+            fontColor = {255, 255, 255, 255},
+            justifyContent = "center", alignItems = "center",
+            onClick = function()
+                if field.action == "open_dialog_editor" then
+                    local DialogEditor = require("dialog.DialogEditor")
+                    DialogEditor.Open(state.tree, nodeRef.id, function()
+                        -- 编辑器关闭后刷新 inspector
+                        state.inspectorNodeId = nil
+                        M._buildInspector(nodeRef.id)
+                    end)
+                end
+            end,
         }
 
     elseif field.type == "path_editor" then
@@ -867,6 +948,16 @@ function M.HandleInput(dt)
 
     state.justClosed = false
 
+    -- 对话编辑器打开时，屏蔽 NodeCanvas 输入（仅允许 ESC 关闭 + 拖动）
+    local DialogEditor = require("dialog.DialogEditor")
+    if DialogEditor.active then
+        if input:GetKeyPress(KEY_ESCAPE) then
+            DialogEditor.Close(true)  -- ESC 确认关闭编辑器
+        end
+        DialogEditor.HandleInput()  -- 处理图层拖动
+        return  -- 屏蔽所有其他 NodeCanvas 输入
+    end
+
     -- ESC 关闭
     if input:GetKeyPress(KEY_ESCAPE) then
         if state.contextMenu then
@@ -1189,6 +1280,12 @@ function M.Draw(vg, physW, physH)
 
     -- 底部提示
     M._drawHints(vg, physW, physH)
+
+    -- 对话编辑器实时预览（覆盖在最上层）
+    local DialogEditor = require("dialog.DialogEditor")
+    if DialogEditor.active then
+        DialogEditor.DrawPreview(vg, physW, physH)
+    end
 end
 
 -- ============================================================================

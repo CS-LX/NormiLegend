@@ -2397,7 +2397,7 @@ function M.BuildPropsPanel(panel, objects)
         if #levelEditor_.customTextures > 0 then
             panel:AddChild(UI.Label { text = "已导入素材 (点击应用):", fontSize = 10, fontColor = {150,140,180,255}, marginTop = 6 })
             -- 按分类分组
-            local catGroups = { bg = {}, tile = {}, seq = {}, interact = {}, solid = {}, other = {} }
+            local catGroups = { bg = {}, tile = {}, seq = {}, interact = {}, solid = {}, sign = {}, dlg_portrait = {}, dlg_bg = {}, dlg_whole = {}, other = {} }
             for tidx, asset in ipairs(levelEditor_.customTextures) do
                 local cat = asset.cat or "other"
                 if cat == "sequence" or cat == "seq" then cat = "seq" end
@@ -2407,6 +2407,10 @@ function M.BuildPropsPanel(panel, objects)
             local catOrder = {
                 { key = "bg", label = "背景", color = {100, 180, 100, 255} },
                 { key = "tile", label = "物件/地面", color = {180, 140, 80, 255} },
+                { key = "sign", label = "标志", color = {220, 180, 60, 255} },
+                { key = "dlg_portrait", label = "对话框/立绘", color = {140, 180, 255, 255} },
+                { key = "dlg_bg", label = "对话框/底图", color = {180, 140, 220, 255} },
+                { key = "dlg_whole", label = "对话框/整体", color = {160, 200, 180, 255} },
                 { key = "seq", label = "序列帧", color = {100, 160, 220, 255} },
                 { key = "interact", label = "交互", color = {220, 120, 180, 255} },
                 { key = "solid", label = "纯色", color = {200, 200, 200, 255} },
