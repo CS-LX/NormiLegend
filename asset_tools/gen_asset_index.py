@@ -141,6 +141,54 @@ SEQ_PREFIX = ("bat_", "ghost_", "wolf_", "skeleton_", "wyvern_", "gargoyle_",
               "ice_charge", "ice_bg")
 
 
+# 哈希名图片的已知元数据（看图人工确认，固定不变）：path -> (分类, 语义描述)
+# 这些文件名无语义，规则无法识别，故在此显式登记，重跑稳定重建。
+KNOWN_ASSETS = {
+    "image/9a0957c5da6a2a420181eb06581034a0.png":
+        ("portrait", "龙角少女角色三视图(正/侧/背),黑长发龙角红眼,白裙红蝴蝶结龙尾"),
+    "image/Image_1780450663048_284.png":
+        ("portrait", "金发蓝眼少女头像,蓝蝴蝶结马尾十字架项链,紫色史莱姆,透明背景"),
+    "image/cgt-20260602230250-l6kp6_last_frame.png":
+        ("bg", "哥特白教堂天空场景-白天蓝天白云白鸽流星,白发披风少女持权杖背影"),
+    "image/cgt-20260603031517-msx5m_last_frame.png":
+        ("bg", "哥特白教堂天空场景-夜空版,流星星空飞鸟,白发披风少女持发光权杖"),
+    "image/cgt-20260603032003-rdpx8_last_frame.png":
+        ("bg", "哥特白教堂天空场景-黄昏版,橙红夕阳飞鸟,白发披风少女持权杖"),
+    "image/cgt-20260603032520-jmtl9_last_frame.png":
+        ("bg", "哥特白教堂天空场景-晨曦版,霞光破晓飞鸟绿草地,白发披风少女持权杖"),
+    "image/cgt-20260603035705-qnbs5_last_frame.png":
+        ("bg", "哥特白教堂天空场景-明亮白天,蓝天白云白鸽,白发披风少女持权杖"),
+    "image/cgt-20260603043919-5ncrk_last_frame.png":
+        ("bg", "哥特白教堂天空场景-蓝天版,流星,白发披风少女持权杖,构图偏右"),
+    "image/cgt-20260603044602-wlhlm_last_frame.png":
+        ("bg", "哥特白教堂天空场景-蓝天白鸽群,流星,白发披风少女持权杖"),
+    "image/cgt-20260603094111-sl4bz_last_frame.png":
+        ("bg", "哥特白教堂天空场景-蓝天闪星,白鸽,白发披风少女持权杖"),
+    "image/cgt-20260603094639-4nrg2_last_frame.png":
+        ("portrait", "金发蓝眼少女头像特写,十字架项链紫色史莱姆,白底"),
+    "image/cgt-20260604035001-rbc8h_last_frame.png":
+        ("portrait", "银白发蓝眼少女水手服坐桌边半身像,蓝调室内花瓶茶具紫藤"),
+    "image/cgt-20260604041023-fdgcz_last_frame.png":
+        ("bg", "钢琴花园场景-紫藤庭院,银白发水手服少女坐桌边,黑三角钢琴风铃,蓝调全景"),
+    "image/cgt-20260604041729-hlvt9_last_frame.png":
+        ("bg", "钢琴花园场景-茂密紫藤版,银白发水手服少女,黑三角钢琴,蓝调全景"),
+    "image/cgt-20260605042238-rb7b6_last_frame.png":
+        ("portrait", "金发蓝眼少女头像,十字架项链紫色史莱姆,白底"),
+    "image/cgt-20260608060933-fjfzw_last_frame.png":
+        ("portrait", "Q版少女蓝色线稿-侧面行走,水手服短裙麻花辫,蓝白单色白底"),
+    "image/cgt-20260608063658-vlzvm_last_frame.png":
+        ("portrait", "Q版少女蓝色线稿-侧面站立待机,水手服短裙,蓝白单色白底"),
+    "image/cgt-20260608064718-zt7t6_last_frame.png":
+        ("portrait", "Q版少女蓝色线稿-正面站立,水手服短裙,蓝白单色白底"),
+    "image/cgt-20260608065436-8nkzk_last_frame.png":
+        ("portrait", "Q版少女蓝色线稿-正面站立双马尾,水手服短裙,蓝白单色白底"),
+    "image/cgt-20260610210232-w8d8k_last_frame.png":
+        ("portrait", "少女肖像漫画素描风,深蓝底半调网点,水手服麻花辫,蓝白单色"),
+    "image/cgt-20260614050431-752mv_last_frame.png":
+        ("portrait", "少女肖像黑白线稿草图,铅笔线稿麻花辫,水手服领,白底"),
+}
+
+
 def classify(rel_from_image, stem):
     """rel_from_image: 形如 '对话框/底图/xxx.png' 的相对路径（不含 image/ 前缀）。"""
     d = os.path.dirname(rel_from_image)  # 目录部分
@@ -252,13 +300,16 @@ def main():
             ref = "image/" + rel_from_image  # 与 ImportTexture/cache 用法一致
             stem = os.path.splitext(fn)[0]
 
-            cat = classify(rel_from_image, stem)
+            known = KNOWN_ASSETS.get(ref)
+            cat = known[0] if known else classify(rel_from_image, stem)
             frames = detect_frames(stem)
             size = read_size(full)
             hashed = is_hashname(stem)
             name = stem if hashed else clean_name(stem)
 
-            if ref in existing:
+            if known:
+                desc = known[1]
+            elif ref in existing:
                 desc = existing[ref]
             elif hashed:
                 desc = "?"

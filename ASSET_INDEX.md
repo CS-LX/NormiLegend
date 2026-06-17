@@ -8,17 +8,17 @@
 > **查找方式：用 Grep 按关键词检索本文件，不要全文读取。**
 > 例：找对话框立绘 `Grep "dlg|对话框|立绘"`；找冰法 `Grep "冰法"`
 
-统计：共 264 项，其中 21 项待补描述（标记为 `?`）。
+统计：共 264 项，其中 0 项待补描述（标记为 `?`）。
 
 ## 分类概览
 
-- `[bg]` 背景：76 项
+- `[bg]` 背景：86 项
 - `[tile]` 地面/平台：10 项
 - `[sign]` 标志：5 项
 - `[interact]` 交互物件：4 项
 - `[effect]` 特效：1 项
 - `[seq]` 序列帧/动画：66 项
-- `[portrait]` 立绘/头像：7 项
+- `[portrait]` 立绘/头像：18 项
 - `[dlg_bg]` 对话框-底图：2 项
 - `[dlg_portrait]` 对话框-立绘：12 项
 - `[dlg_whole]` 对话框-整体：4 项
@@ -27,7 +27,7 @@
 - `[cursor]` 光标：2 项
 - `[transition]` 转场：3 项
 - `[solid]` 纯色：2 项
-- `[other]` 其他/未分类：33 项
+- `[other]` 其他/未分类：12 项
 
 ## [bg] 背景
 
@@ -35,6 +35,16 @@
 [bg] image/bg_castle_cartoon_20260601173316.png | bg_castle_cartoon | bg_castle_cartoon | 1376x768
 [bg] image/bg_forest_20260601154001.png | bg_forest | bg_forest | 1290x720
 [bg] image/bg_ice_plain_20260601153958.png | bg_ice_plain | bg_ice_plain | 1290x720
+[bg] image/cgt-20260602230250-l6kp6_last_frame.png | cgt-20260602230250-l6kp6_last_frame | 哥特白教堂天空场景-白天蓝天白云白鸽流星,白发披风少女持权杖背影 | 1280x720
+[bg] image/cgt-20260603031517-msx5m_last_frame.png | cgt-20260603031517-msx5m_last_frame | 哥特白教堂天空场景-夜空版,流星星空飞鸟,白发披风少女持发光权杖 | 1280x720
+[bg] image/cgt-20260603032003-rdpx8_last_frame.png | cgt-20260603032003-rdpx8_last_frame | 哥特白教堂天空场景-黄昏版,橙红夕阳飞鸟,白发披风少女持权杖 | 1280x720
+[bg] image/cgt-20260603032520-jmtl9_last_frame.png | cgt-20260603032520-jmtl9_last_frame | 哥特白教堂天空场景-晨曦版,霞光破晓飞鸟绿草地,白发披风少女持权杖 | 1280x720
+[bg] image/cgt-20260603035705-qnbs5_last_frame.png | cgt-20260603035705-qnbs5_last_frame | 哥特白教堂天空场景-明亮白天,蓝天白云白鸽,白发披风少女持权杖 | 1280x720
+[bg] image/cgt-20260603043919-5ncrk_last_frame.png | cgt-20260603043919-5ncrk_last_frame | 哥特白教堂天空场景-蓝天版,流星,白发披风少女持权杖,构图偏右 | 1280x720
+[bg] image/cgt-20260603044602-wlhlm_last_frame.png | cgt-20260603044602-wlhlm_last_frame | 哥特白教堂天空场景-蓝天白鸽群,流星,白发披风少女持权杖 | 1280x720
+[bg] image/cgt-20260603094111-sl4bz_last_frame.png | cgt-20260603094111-sl4bz_last_frame | 哥特白教堂天空场景-蓝天闪星,白鸽,白发披风少女持权杖 | 1280x720
+[bg] image/cgt-20260604041023-fdgcz_last_frame.png | cgt-20260604041023-fdgcz_last_frame | 钢琴花园场景-紫藤庭院,银白发水手服少女坐桌边,黑三角钢琴风铃,蓝调全景 | 1280x720
+[bg] image/cgt-20260604041729-hlvt9_last_frame.png | cgt-20260604041729-hlvt9_last_frame | 钢琴花园场景-茂密紫藤版,银白发水手服少女,黑三角钢琴,蓝调全景 | 1280x720
 [bg] image/chapter_bg_blueprint.png | chapter_bg_blueprint | chapter_bg_blueprint | 1280x720
 [bg] image/chapter_bg_gold.png | chapter_bg_gold | chapter_bg_gold | 1280x720
 [bg] image/edited_ice_mage_poster_dawn_20260602185241.png | ice_mage_poster_dawn | ice_mage_poster_dawn | 1935x1080
@@ -224,8 +234,19 @@
 ## [portrait] 立绘/头像
 
 ```
+[portrait] image/9a0957c5da6a2a420181eb06581034a0.png | 9a0957c5da6a2a420181eb06581034a0 | 龙角少女角色三视图(正/侧/背),黑长发龙角红眼,白裙红蝴蝶结龙尾 | 1672x941
+[portrait] image/Image_1780450663048_284.png | Image_1780450663048_284 | 金发蓝眼少女头像,蓝蝴蝶结马尾十字架项链,紫色史莱姆,透明背景 | 907x884
 [portrait] image/avatar_char1_20260602072030.png | avatar_char1 | avatar_char1 | 128x128
 [portrait] image/avatar_char2_20260602072055.png | avatar_char2 | avatar_char2 | 128x128
+[portrait] image/cgt-20260603094639-4nrg2_last_frame.png | cgt-20260603094639-4nrg2_last_frame | 金发蓝眼少女头像特写,十字架项链紫色史莱姆,白底 | 960x960
+[portrait] image/cgt-20260604035001-rbc8h_last_frame.png | cgt-20260604035001-rbc8h_last_frame | 银白发蓝眼少女水手服坐桌边半身像,蓝调室内花瓶茶具紫藤 | 1280x720
+[portrait] image/cgt-20260605042238-rb7b6_last_frame.png | cgt-20260605042238-rb7b6_last_frame | 金发蓝眼少女头像,十字架项链紫色史莱姆,白底 | 960x960
+[portrait] image/cgt-20260608060933-fjfzw_last_frame.png | cgt-20260608060933-fjfzw_last_frame | Q版少女蓝色线稿-侧面行走,水手服短裙麻花辫,蓝白单色白底 | 960x960
+[portrait] image/cgt-20260608063658-vlzvm_last_frame.png | cgt-20260608063658-vlzvm_last_frame | Q版少女蓝色线稿-侧面站立待机,水手服短裙,蓝白单色白底 | 960x960
+[portrait] image/cgt-20260608064718-zt7t6_last_frame.png | cgt-20260608064718-zt7t6_last_frame | Q版少女蓝色线稿-正面站立,水手服短裙,蓝白单色白底 | 960x960
+[portrait] image/cgt-20260608065436-8nkzk_last_frame.png | cgt-20260608065436-8nkzk_last_frame | Q版少女蓝色线稿-正面站立双马尾,水手服短裙,蓝白单色白底 | 960x960
+[portrait] image/cgt-20260610210232-w8d8k_last_frame.png | cgt-20260610210232-w8d8k_last_frame | 少女肖像漫画素描风,深蓝底半调网点,水手服麻花辫,蓝白单色 | 960x960
+[portrait] image/cgt-20260614050431-752mv_last_frame.png | cgt-20260614050431-752mv_last_frame | 少女肖像黑白线稿草图,铅笔线稿麻花辫,水手服领,白底 | 960x960
 [portrait] image/char_portrait_live2d.png | char_portrait_live2d | char_portrait_live2d | 445x438
 [portrait] image/冰法少女大头照_20260603162007.png | 冰法少女大头照 | 冰法少女大头照 | 1024x1024
 [portrait] image/角色正面_20260607223004.png | 角色正面 | 角色正面 | 1024x1024
@@ -338,27 +359,6 @@
 ## [other] 其他/未分类
 
 ```
-[other] image/9a0957c5da6a2a420181eb06581034a0.png | 9a0957c5da6a2a420181eb06581034a0 | ? | 1672x941
-[other] image/Image_1780450663048_284.png | Image_1780450663048_284 | ? | 907x884
-[other] image/cgt-20260602230250-l6kp6_last_frame.png | cgt-20260602230250-l6kp6_last_frame | ? | 1280x720
-[other] image/cgt-20260603031517-msx5m_last_frame.png | cgt-20260603031517-msx5m_last_frame | ? | 1280x720
-[other] image/cgt-20260603032003-rdpx8_last_frame.png | cgt-20260603032003-rdpx8_last_frame | ? | 1280x720
-[other] image/cgt-20260603032520-jmtl9_last_frame.png | cgt-20260603032520-jmtl9_last_frame | ? | 1280x720
-[other] image/cgt-20260603035705-qnbs5_last_frame.png | cgt-20260603035705-qnbs5_last_frame | ? | 1280x720
-[other] image/cgt-20260603043919-5ncrk_last_frame.png | cgt-20260603043919-5ncrk_last_frame | ? | 1280x720
-[other] image/cgt-20260603044602-wlhlm_last_frame.png | cgt-20260603044602-wlhlm_last_frame | ? | 1280x720
-[other] image/cgt-20260603094111-sl4bz_last_frame.png | cgt-20260603094111-sl4bz_last_frame | ? | 1280x720
-[other] image/cgt-20260603094639-4nrg2_last_frame.png | cgt-20260603094639-4nrg2_last_frame | ? | 960x960
-[other] image/cgt-20260604035001-rbc8h_last_frame.png | cgt-20260604035001-rbc8h_last_frame | ? | 1280x720
-[other] image/cgt-20260604041023-fdgcz_last_frame.png | cgt-20260604041023-fdgcz_last_frame | ? | 1280x720
-[other] image/cgt-20260604041729-hlvt9_last_frame.png | cgt-20260604041729-hlvt9_last_frame | ? | 1280x720
-[other] image/cgt-20260605042238-rb7b6_last_frame.png | cgt-20260605042238-rb7b6_last_frame | ? | 960x960
-[other] image/cgt-20260608060933-fjfzw_last_frame.png | cgt-20260608060933-fjfzw_last_frame | ? | 960x960
-[other] image/cgt-20260608063658-vlzvm_last_frame.png | cgt-20260608063658-vlzvm_last_frame | ? | 960x960
-[other] image/cgt-20260608064718-zt7t6_last_frame.png | cgt-20260608064718-zt7t6_last_frame | ? | 960x960
-[other] image/cgt-20260608065436-8nkzk_last_frame.png | cgt-20260608065436-8nkzk_last_frame | ? | 960x960
-[other] image/cgt-20260610210232-w8d8k_last_frame.png | cgt-20260610210232-w8d8k_last_frame | ? | 960x960
-[other] image/cgt-20260614050431-752mv_last_frame.png | cgt-20260614050431-752mv_last_frame | ? | 960x960
 [other] image/chibi_character.png | chibi_character | chibi_character | 1044x1061
 [other] image/edited_piano_scene_refined_20260603105109.png | piano_scene_refined | piano_scene_refined | 1935x1080
 [other] image/edited_拉特兰赛博宗教风格_20260611204737.png | 拉特兰赛博宗教风格 | 拉特兰赛博宗教风格 | 1024x1024
